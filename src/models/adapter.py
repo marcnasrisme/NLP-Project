@@ -26,7 +26,7 @@ def load_base_model(
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=torch.bfloat16,
         bnb_4bit_use_double_quant=True,
     )
 
@@ -70,6 +70,8 @@ def attach_adapter(
 def make_training_args(config: dict, output_dir: str) -> SFTConfig:
     """build SFTConfig from the yaml config"""
     train = config["training"]
+    # bf16 only works on CUDA GPUs, skip it on CPU/MPS to avoid errors
+    use_bf16 = train.get("bf16", False) and torch.cuda.is_available()
     return SFTConfig(
         output_dir=output_dir,
         num_train_epochs=train["epochs"],
@@ -80,7 +82,7 @@ def make_training_args(config: dict, output_dir: str) -> SFTConfig:
         max_length=train["max_seq_length"],
         save_steps=train["save_steps"],
         logging_steps=train["logging_steps"],
-        fp16=train.get("fp16", False),
+        bf16=use_bf16,
         save_total_limit=2,
         report_to="none",
         remove_unused_columns=False,

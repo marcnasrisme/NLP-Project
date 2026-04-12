@@ -76,9 +76,13 @@ class TestTrainingArgs:
         args = make_training_args(config, "test_output")
         assert args.save_total_limit == 2
 
-    def test_fp16(self, config):
+    def test_bf16_depends_on_cuda(self, config):
+        import torch
         args = make_training_args(config, "test_output")
-        assert args.fp16 is True
+        if torch.cuda.is_available():
+            assert args.bf16 is True
+        else:
+            assert args.bf16 is False
 
     def test_max_length(self, config):
         args = make_training_args(config, "test_output")
