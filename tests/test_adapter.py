@@ -79,3 +79,7 @@ class TestTrainingArgs:
     def test_fp16(self, config):
         args = make_training_args(config, "test_output")
         assert args.fp16 is True
+
+    def test_max_length(self, config):
+        args = make_training_args(config, "test_output")
+        assert args.max_length == 512

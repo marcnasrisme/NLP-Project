@@ -8,9 +8,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 
 
 def load_config(path: str = "configs/adapter_training.yaml") -> dict:
@@ -68,16 +67,17 @@ def attach_adapter(
     return get_peft_model(model, lora_config)
 
 
-def make_training_args(config: dict, output_dir: str) -> TrainingArguments:
-    """build TrainingArguments from the yaml config"""
+def make_training_args(config: dict, output_dir: str) -> SFTConfig:
+    """build SFTConfig from the yaml config"""
     train = config["training"]
-    return TrainingArguments(
+    return SFTConfig(
         output_dir=output_dir,
         num_train_epochs=train["epochs"],
         per_device_train_batch_size=train["batch_size"],
         gradient_accumulation_steps=train["gradient_accumulation_steps"],
         learning_rate=train["learning_rate"],
         warmup_ratio=train["warmup_ratio"],
+        max_length=train["max_seq_length"],
         save_steps=train["save_steps"],
         logging_steps=train["logging_steps"],
         fp16=train.get("fp16", False),
@@ -97,8 +97,6 @@ def train_adapter(
 ) -> None:
     """train a LoRA adapter using SFTTrainer with checkpoint/resume support"""
     train_dataset = Dataset.from_list(train_examples)
-    max_seq_length = config["training"]["max_seq_length"]
-
     training_args = make_training_args(config, output_dir)
 
     trainer = SFTTrainer(
@@ -106,7 +104,6 @@ def train_adapter(
         args=training_args,
         train_dataset=train_dataset,
         processing_class=tokenizer,
-        max_seq_length=max_seq_length,
     )
 
     # resume from last checkpoint if one exists
