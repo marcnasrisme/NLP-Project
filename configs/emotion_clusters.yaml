@@ -1,0 +1,100 @@
+n_clusters: 4
+emotion_to_cluster:
+  afraid: 0
+  angry: 0
+  annoyed: 0
+  anticipating: 2
+  apprehensive: 3
+  ashamed: 3
+  caring: 1
+  confident: 1
+  content: 1
+  devastated: 0
+  disappointed: 3
+  disgusted: 0
+  embarrassed: 3
+  excited: 1
+  faithful: 1
+  furious: 0
+  grateful: 1
+  guilty: 3
+  hopeful: 1
+  impressed: 1
+  jealous: 0
+  joyful: 1
+  lonely: 3
+  nostalgic: 2
+  prepared: 1
+  proud: 1
+  sad: 3
+  sentimental: 2
+  surprised: 2
+  terrified: 0
+  trusting: 1
+  wistful: 2
+cluster_names:
+  2: positive_low_arousal
+  1: positive_high_arousal
+  3: negative_low_arousal
+  0: negative_high_arousal
+clusters:
+  positive_low_arousal:
+    id: 2
+    emotions:
+    - anticipating
+    - nostalgic
+    - sentimental
+    - surprised
+    - wistful
+    centroid:
+      valence: 0.575
+      arousal: 0.542
+      dominance: 0.432
+  positive_high_arousal:
+    id: 1
+    emotions:
+    - caring
+    - confident
+    - content
+    - excited
+    - faithful
+    - grateful
+    - hopeful
+    - impressed
+    - joyful
+    - prepared
+    - proud
+    - trusting
+    centroid:
+      valence: 0.862
+      arousal: 0.597
+      dominance: 0.704
+  negative_low_arousal:
+    id: 3
+    emotions:
+    - apprehensive
+    - ashamed
+    - disappointed
+    - embarrassed
+    - guilty
+    - lonely
+    - sad
+    centroid:
+      valence: 0.125
+      arousal: 0.49
+      dominance: 0.181
+  negative_high_arousal:
+    id: 0
+    emotions:
+    - afraid
+    - angry
+    - annoyed
+    - devastated
+    - disgusted
+    - furious
+    - jealous
+    - terrified
+    centroid:
+      valence: 0.111
+      arousal: 0.79
+      dominance: 0.299

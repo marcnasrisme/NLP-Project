@@ -1,0 +1,28 @@
+# qlora adapter training hyperparameters
+
+model:
+  name: mistralai/Mistral-7B-Instruct-v0.3
+  quantization: 4bit
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+  task_type: CAUSAL_LM
+
+training:
+  epochs: 3
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.03
+  max_seq_length: 512
+  save_steps: 100
+  logging_steps: 10
+  fp16: true
+  output_dir: outputs/adapters

@@ -1,0 +1,13 @@
+# gating head training hyperparameters
+# TODO: fill in after gating module is implemented
+
+gating:
+  hidden_dim: 128
+  dropout: 0.1
+  n_adapters: 4
+
+training:
+  epochs: 5
+  batch_size: 8
+  learning_rate: 1.0e-3
+  warmup_ratio: 0.05
