@@ -15,7 +15,7 @@ def load_splits(
     dataset_name: str = "facebook/empathetic_dialogues",
 ) -> dict[str, list[dict]]:
     """load EmpatheticDialogues and group into conversations per split"""
-    ds = load_dataset(dataset_name)
+    ds = load_dataset(dataset_name, trust_remote_code=True)
     splits = {}
     for split_name in ("train", "validation", "test"):
         splits[split_name] = group_into_conversations(ds[split_name])
