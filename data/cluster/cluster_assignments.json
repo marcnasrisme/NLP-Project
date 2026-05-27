@@ -1,0 +1,89 @@
+{
+  "method": "vad_quadrant",
+  "thresholds": {
+    "valence": 0.5,
+    "arousal": 0.5
+  },
+  "emotion_to_cluster": {
+    "afraid": 2,
+    "angry": 2,
+    "annoyed": 2,
+    "anticipating": 0,
+    "anxious": 2,
+    "apprehensive": 2,
+    "ashamed": 2,
+    "caring": 0,
+    "confident": 0,
+    "content": 1,
+    "devastated": 2,
+    "disappointed": 3,
+    "disgusted": 2,
+    "embarrassed": 2,
+    "excited": 0,
+    "faithful": 1,
+    "furious": 2,
+    "grateful": 1,
+    "guilty": 2,
+    "hopeful": 0,
+    "impressed": 0,
+    "jealous": 2,
+    "joyful": 0,
+    "lonely": 3,
+    "nostalgic": 1,
+    "prepared": 0,
+    "proud": 0,
+    "sad": 3,
+    "sentimental": 1,
+    "surprised": 0,
+    "terrified": 2,
+    "trusting": 1
+  },
+  "cluster_to_name": {
+    "0": "positive_high_arousal",
+    "1": "positive_low_arousal",
+    "2": "negative_high_arousal",
+    "3": "negative_low_arousal"
+  },
+  "cluster_to_emotions": {
+    "0": [
+      "anticipating",
+      "caring",
+      "confident",
+      "excited",
+      "hopeful",
+      "impressed",
+      "joyful",
+      "prepared",
+      "proud",
+      "surprised"
+    ],
+    "1": [
+      "content",
+      "faithful",
+      "grateful",
+      "nostalgic",
+      "sentimental",
+      "trusting"
+    ],
+    "2": [
+      "afraid",
+      "angry",
+      "annoyed",
+      "anxious",
+      "apprehensive",
+      "ashamed",
+      "devastated",
+      "disgusted",
+      "embarrassed",
+      "furious",
+      "guilty",
+      "jealous",
+      "terrified"
+    ],
+    "3": [
+      "disappointed",
+      "lonely",
+      "sad"
+    ]
+  }
+}

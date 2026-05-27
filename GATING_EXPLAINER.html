@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DESA — Gating &amp; Routing Explained</title>
+<script>
+  MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true
+    },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b5cad;
+    --accent-soft: #e7f0fa;
+    --code-bg: #f4f4f6;
+    --border: #e1e4e8;
+    --warn-bg: #fff8e1;
+    --warn-border: #f0c419;
+    --good-bg: #e8f5e9;
+    --good-border: #4caf50;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e6e6;
+      --muted: #a0a0a0;
+      --accent: #79b8ff;
+      --accent-soft: #1e2a3a;
+      --code-bg: #1a1d23;
+      --border: #30363d;
+      --warn-bg: #2a2410;
+      --warn-border: #d4a017;
+      --good-bg: #143018;
+      --good-border: #2e7d32;
+    }
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    margin: 0;
+  }
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.55rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; margin-top: 3rem; }
+  h3 { font-size: 1.2rem; }
+  h4 { font-size: 1.05rem; color: var(--muted); }
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    font-size: 0.92em;
+  }
+  pre code { background: transparent; padding: 0; }
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn {
+    border-left-color: var(--warn-border);
+    background: var(--warn-bg);
+  }
+  .callout.good {
+    border-left-color: var(--good-border);
+    background: var(--good-bg);
+  }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  ul, ol { padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  table {
+    border-collapse: collapse;
+    margin: 1rem 0;
+    width: 100%;
+    font-size: 0.95em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+  }
+  th { background: var(--code-bg); }
+  mjx-container[display="true"] { margin: 1rem 0 !important; }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .toc ul { margin: 0.3rem 0; }
+  .diagram {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1.2rem 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .label-good { color: #2e7d32; font-weight: 600; }
+  .label-bad { color: #c62828; font-weight: 600; }
+  @media (prefers-color-scheme: dark) {
+    .label-good { color: #81c784; }
+    .label-bad { color: #ef5350; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>DESA — Gating &amp; Routing, Explained from First Principles</h1>
+
+<p class="muted">A walk-through of how the four LoRA experts get combined at inference time, what mean pooling is, how the gate is trained, and exactly what went wrong in the current run.</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#why">1. Why a gate at all?</a></li>
+    <li><a href="#tokens">2. From tokens to a single feature vector</a></li>
+    <li><a href="#meanpool">3. What is mean pooling, mathematically?</a></li>
+    <li><a href="#mlp">4. The MLP head: turning $\bar h$ into 4 numbers</a></li>
+    <li><a href="#softmax">5. Softmax: making it a probability distribution</a></li>
+    <li><a href="#training">6. Training the gate: cross-entropy loss</a></li>
+    <li><a href="#inference">7. Inference: blending the LoRA experts</a></li>
+    <li><a href="#xlora">8. X-LoRA: per-token, per-layer routing</a></li>
+    <li><a href="#failure">9. Why the gates collapsed in your run</a></li>
+    <li><a href="#fixes">10. Concrete fixes</a></li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="why">1. Why a gate at all?</h2>
+
+<p>You trained four LoRA experts, one per emotion quadrant. At inference time, given a new conversation, you have to decide <em>which expert(s) to use</em>.</p>
+
+<p>The simplest options:</p>
+
+<ul>
+  <li><strong>Hard pick:</strong> use the gold emotion label to pick adapter $k$. Works if you cheat and use the label.</li>
+  <li><strong>Soft mix:</strong> compute weights $\alpha = (\alpha_0, \alpha_1, \alpha_2, \alpha_3)$ with $\alpha_k \ge 0$, $\sum_k \alpha_k = 1$, and use a weighted combination of the four experts.</li>
+</ul>
+
+<p>The "gate" (or "router") is the small neural network that produces $\alpha$ from the input conversation. Think of it as a <strong>traffic cop</strong>: looking at what the user just said, it decides how much weight to give each emotional expert.</p>
+
+<div class="callout">
+  <strong>The signature of a gate:</strong> conversation text $\rightarrow$ probability vector $\alpha \in \Delta^3$ over 4 adapters.<br>
+  $\Delta^3$ is the "3-simplex" — the set of 4-vectors of non-negative numbers summing to 1.
+</div>
+
+<hr>
+
+<h2 id="tokens">2. From tokens to a single feature vector</h2>
+
+<p>The conversation is text. The gate is a small MLP. To bridge the gap, we run the conversation through Mistral and grab its internal representation.</p>
+
+<p>Concretely, suppose the user says <em>"I just got promoted at work!"</em>. Mistral's tokenizer breaks it into tokens (let's say 8 of them):</p>
+
+<div class="diagram">tokens     :  [I]  [just]  [got]  [promot]  [ed]  [at]  [work]  [!]
+positions  :   1     2      3      4         5     6      7      8</div>
+
+<p>Mistral processes these tokens and produces a <strong>last-layer hidden state</strong> $h \in \mathbb{R}^{T \times d}$, where:</p>
+
+<ul>
+  <li>$T$ = number of tokens (here, 8)</li>
+  <li>$d$ = hidden size of Mistral-7B (here, $d = 4096$)</li>
+</ul>
+
+<p>So $h$ is an $8 \times 4096$ matrix. Each row $h_t \in \mathbb{R}^{4096}$ is a 4096-dimensional vector summarizing what the model "thinks" at position $t$.</p>
+
+<div class="diagram">           dim 1   dim 2   dim 3   ...   dim 4096
+[I]      [ 0.21,  -0.05,   0.84,  ...,   0.13 ]   ← h_1
+[just]   [ 0.18,   0.02,   0.79,  ...,   0.09 ]   ← h_2
+[got]    [ 0.22,  -0.11,   0.91,  ...,   0.15 ]   ← h_3
+[promot] [ 0.45,   0.31,   0.66,  ...,   0.42 ]   ← h_4
+[ed]     [ 0.43,   0.28,   0.61,  ...,   0.39 ]   ← h_5
+[at]     [ 0.12,   0.04,   0.55,  ...,   0.07 ]   ← h_6
+[work]   [ 0.31,   0.18,   0.72,  ...,   0.24 ]   ← h_7
+[!]      [ 0.39,   0.22,   0.65,  ...,   0.31 ]   ← h_8</div>
+
+<p>But our gate's input has to be a <strong>single vector</strong>, not a matrix that varies in size. We need to collapse the $T$ rows into one summary vector. That's where pooling comes in.</p>
+
+<hr>
+
+<h2 id="meanpool">3. What is mean pooling, mathematically?</h2>
+
+<p>"Pooling" just means combining many vectors into one. Common choices:</p>
+
+<ul>
+  <li><strong>Max pooling:</strong> take the elementwise max across positions.</li>
+  <li><strong>Mean pooling:</strong> take the elementwise average across positions.</li>
+  <li><strong>CLS / last-token pooling:</strong> just use the vector at one specific position (e.g. the final token).</li>
+</ul>
+
+<p>DESA uses <strong>mean pooling</strong>. The recipe:</p>
+
+$$
+\bar h = \frac{1}{T} \sum_{t=1}^{T} h_t \quad \in \mathbb{R}^{4096}.
+$$
+
+<p>You add up all 8 row vectors and divide by 8. The result is one 4096-dim vector that "summarizes" the whole sequence.</p>
+
+<h3>Worked numerical example</h3>
+
+<p>Let's pretend $d = 4$ instead of 4096, and $T = 3$ tokens. Suppose:</p>
+
+$$
+h = \begin{bmatrix}
+1.0 & 2.0 & -1.0 & 0.5 \\
+0.0 & 4.0 &  1.0 & 1.5 \\
+2.0 & 0.0 &  3.0 & 1.0
+\end{bmatrix}
+$$
+
+<p>Mean pool, column by column:</p>
+
+$$
+\bar h = \frac{1}{3}\begin{bmatrix} 1.0 + 0.0 + 2.0 \\ 2.0 + 4.0 + 0.0 \\ -1.0 + 1.0 + 3.0 \\ 0.5 + 1.5 + 1.0 \end{bmatrix} = \begin{bmatrix} 1.0 \\ 2.0 \\ 1.0 \\ 1.0 \end{bmatrix}.
+$$
+
+<p>That's it. One vector summarizing the three.</p>
+
+<h3>Why divide by $T$?</h3>
+
+<p>Without dividing, longer sequences would have larger pooled vectors just because more rows are summed in. Dividing by $T$ keeps the magnitude comparable across sequences of different lengths.</p>
+
+<h3>The attention-mask version (the one in the code)</h3>
+
+<p>In a batch, sequences have different lengths but get padded to the same length. Padded positions are dummy tokens and shouldn't contribute. The attention mask $m \in \{0,1\}^T$ marks which positions are real ($m_t = 1$) vs padding ($m_t = 0$).</p>
+
+<p>Masked mean pooling:</p>
+
+$$
+\bar h = \frac{\sum_{t=1}^{T} m_t \, h_t}{\sum_{t=1}^{T} m_t}.
+$$
+
+<p>Numerator: sum only over real tokens. Denominator: count of real tokens. The padding contributes nothing.</p>
+
+<p>From <code>gating.py:32-37</code>:</p>
+
+<pre><code>if attention_mask is not None:
+    mask = attention_mask.unsqueeze(-1).float()
+    pooled = (hidden_states * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)</code></pre>
+
+<p>The <code>clamp(min=1e-9)</code> just protects against an all-zero mask (would cause divide-by-zero).</p>
+
+<div class="callout warn">
+  <strong>The cost of mean pooling:</strong> averaging throws away <em>where</em> things appeared in the sequence. The signal "I'm devastated" at position 1 looks the same as the same words at position 50, after averaging. For short emotional utterances this is fine; for long conversations the emotional cue can get diluted by neutral tokens. We'll come back to this in §9.
+</div>
+
+<hr>
+
+<h2 id="mlp">4. The MLP head: turning $\bar h$ into 4 numbers</h2>
+
+<p>Now we have $\bar h \in \mathbb{R}^{4096}$ and we need 4 numbers (one per adapter). A single linear layer would work, but DESA uses a small two-layer MLP for a tiny bit of nonlinearity:</p>
+
+$$
+z = W_2 \cdot \mathrm{ReLU}(W_1 \bar h + b_1) + b_2 \quad \in \mathbb{R}^{4}.
+$$
+
+<p>Shapes:</p>
+
+<ul>
+  <li>$W_1 \in \mathbb{R}^{1024 \times 4096}$ — projects from 4096 down to 1024 (the "bottleneck").</li>
+  <li>$W_2 \in \mathbb{R}^{4 \times 1024}$ — projects from 1024 down to 4.</li>
+</ul>
+
+<p>The bottleneck is just <code>hidden_dim // 4 = 1024</code>. Why bottleneck at all? Two reasons:</p>
+
+<ol>
+  <li><strong>Parameter count.</strong> A direct $4096 \to 4$ layer has ~16K params. Going $4096 \to 1024 \to 4$ has ~4M params — more capacity to learn nonlinear decision boundaries.</li>
+  <li><strong>Nonlinearity.</strong> ReLU between the layers means the gate can express functions that aren't just linear separators in feature space.</li>
+</ol>
+
+<h3>What is ReLU?</h3>
+
+<p>ReLU = "Rectified Linear Unit". Pointwise:</p>
+
+$$
+\mathrm{ReLU}(x) = \max(x, 0).
+$$
+
+<p>Negative values get zeroed out, positives pass through unchanged. This is the simplest activation that gives the network nonlinear expressive power. Without it, two linear layers compose into one linear layer, which is no more expressive than a single layer.</p>
+
+<h3>What's dropout doing?</h3>
+
+<p>The code wraps a <code>Dropout(0.1)</code> between the two layers. During training only, each unit is randomly zeroed out with probability 0.1. This is a regularizer — it prevents the gate from over-relying on any single feature. At eval time dropout is disabled.</p>
+
+<p>So the output $z \in \mathbb{R}^4$ is called the <strong>logits</strong> — four real numbers, possibly positive or negative, with no probabilistic interpretation yet.</p>
+
+<hr>
+
+<h2 id="softmax">5. Softmax: making it a probability distribution</h2>
+
+<p>We need $\alpha$ to be non-negative and sum to 1 so it can be a valid mixing weight. Softmax does exactly this:</p>
+
+$$
+\alpha_k = \mathrm{softmax}(z)_k = \frac{e^{z_k}}{\sum_{j=0}^{3} e^{z_j}}, \qquad k = 0, 1, 2, 3.
+$$
+
+<h3>Worked example</h3>
+
+<p>Suppose the MLP outputs logits $z = (2.0,\ 1.0,\ -1.0,\ 0.5)$. Compute:</p>
+
+<table>
+<thead>
+<tr><th>k</th><th>$z_k$</th><th>$e^{z_k}$</th><th>$\alpha_k = e^{z_k} / Z$</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>2.0</td><td>7.389</td><td><strong>0.612</strong></td></tr>
+<tr><td>1</td><td>1.0</td><td>2.718</td><td>0.225</td></tr>
+<tr><td>2</td><td>-1.0</td><td>0.368</td><td>0.030</td></tr>
+<tr><td>3</td><td>0.5</td><td>1.649</td><td>0.137</td></tr>
+<tr><td colspan="2"><em>sum $Z$</em></td><td>12.124</td><td>1.000</td></tr>
+</tbody>
+</table>
+
+<p>So the gate is saying: "61% adapter 0, 23% adapter 1, 3% adapter 2, 14% adapter 3."</p>
+
+<h3>Three properties to internalize</h3>
+
+<ul>
+  <li><strong>Exponentiation amplifies differences.</strong> $z_0 = 2.0$ vs $z_1 = 1.0$ is a difference of 1, but the resulting probabilities differ by a factor of ~2.7 ($e^1$). Softmax sharpens.</li>
+  <li><strong>Shift invariance.</strong> Adding a constant $c$ to every $z_k$ changes nothing: $e^{z_k + c} / \sum_j e^{z_j + c} = e^c \cdot e^{z_k} / (e^c \cdot \sum_j e^{z_j}) = \alpha_k$. So only differences between logits matter.</li>
+  <li><strong>Uniform output when logits are equal.</strong> If $z_0 = z_1 = z_2 = z_3$, then $\alpha = (1/4, 1/4, 1/4, 1/4)$. <strong>This is the failure mode we'll see in §9.</strong></li>
+</ul>
+
+<hr>
+
+<h2 id="training">6. Training the gate: cross-entropy loss</h2>
+
+<p>The gate has parameters $W_1, b_1, W_2, b_2$. Mistral's parameters are <strong>frozen</strong> — only the gate trains.</p>
+
+<h3>What's the supervision signal?</h3>
+
+<p>For each training example, we know the gold emotion (e.g., <em>"excited"</em>), so we know which cluster it belongs to via the VAD quadrant rule (e.g., cluster 0 = positive_high_arousal). That cluster ID $y \in \{0,1,2,3\}$ is the target label.</p>
+
+<p>The gate sees the conversation context (history with the gold response stripped, see <code>build_context_prompt</code>), produces $\alpha$, and gets penalized if $\alpha_y$ — the probability mass on the correct cluster — is low.</p>
+
+<h3>Cross-entropy loss</h3>
+
+<p>For one example with gold cluster $y$:</p>
+
+$$
+\mathcal{L}_{\text{turn}} = -\log \alpha_y = -\log \mathrm{softmax}(z)_y.
+$$
+
+<p>Intuition:</p>
+
+<ul>
+  <li>If $\alpha_y = 1$ (perfect): $\mathcal{L} = -\log 1 = 0$. No loss.</li>
+  <li>If $\alpha_y = 0.25$ (uniform): $\mathcal{L} = -\log 0.25 \approx 1.386$. The "uniform random" baseline.</li>
+  <li>If $\alpha_y = 0.01$ (very wrong): $\mathcal{L} = -\log 0.01 \approx 4.605$. Big loss → big gradient → big update.</li>
+</ul>
+
+<h3>How the update flows (chain rule, sketch)</h3>
+
+<p>Backpropagation gives gradients with respect to each parameter:</p>
+
+$$
+\frac{\partial \mathcal{L}}{\partial W_2}, \quad \frac{\partial \mathcal{L}}{\partial W_1}, \quad \text{etc.}
+$$
+
+<p>AdamW (the optimizer) takes a step in the direction that reduces $\mathcal{L}$:</p>
+
+$$
+W \leftarrow W - \eta \cdot \widehat{\nabla}_W \mathcal{L},
+$$
+
+<p>where $\eta = 10^{-4}$ is the learning rate and $\widehat{\nabla}$ is Adam's smoothed gradient estimate. We do this for 2 epochs over 4 × 512 = 2048 balanced examples.</p>
+
+<p>From <code>gating.py:131-188</code>:</p>
+
+<pre><code>train_records = load_gating_records("train", max_per_cluster=512)
+gate = TurnLevelGatingHead(hidden_dim=4096).to(device)
+optimizer = torch.optim.AdamW(gate.parameters(), lr=1e-4)
+
+for epoch in range(epochs):
+    for batch in train_loader:
+        labels = batch.pop("labels")  # gold cluster ids
+        with torch.no_grad():
+            outputs = base_model(**batch, output_hidden_states=True)
+            hidden_states = outputs.hidden_states[-1]   # last layer h
+        logits = gate.logits(hidden_states, batch["attention_mask"])
+        loss = F.cross_entropy(logits, labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()</code></pre>
+
+<p>Note: Mistral runs inside <code>torch.no_grad()</code> — its parameters never update. The gradient only flows through the small MLP gate.</p>
+
+<hr>
+
+<h2 id="inference">7. Inference: blending the LoRA experts</h2>
+
+<p>Once trained, at generation time:</p>
+
+<ol>
+  <li>Format the conversation history as a prompt.</li>
+  <li>Forward pass through frozen Mistral (with all adapters disabled), grab last hidden state.</li>
+  <li>Mean-pool and feed through the gate $\Rightarrow \alpha \in \mathbb{R}^4$.</li>
+  <li>Build a "virtual" weighted adapter: $\Delta W_{\text{blend}} = \sum_k \alpha_k \, \Delta W^{(k)} = \sum_k \alpha_k B^{(k)} A^{(k)}$.</li>
+  <li>Activate that blended adapter and generate the reply.</li>
+</ol>
+
+<h3>Why does linear blending make sense for LoRA?</h3>
+
+<p>Each cluster expert produces a delta $\Delta W^{(k)} = B^{(k)} A^{(k)}$. The forward pass with adapter $k$ is:</p>
+
+$$
+y^{(k)} = W x + \Delta W^{(k)} x.
+$$
+
+<p>If we apply a convex combination of deltas:</p>
+
+$$
+y_{\text{blend}} = W x + \left( \sum_k \alpha_k \Delta W^{(k)} \right) x = \sum_k \alpha_k \big( W x + \Delta W^{(k)} x \big) - \big(\sum_k \alpha_k - 1\big) W x.
+$$
+
+<p>Since $\sum_k \alpha_k = 1$, the second term vanishes and:</p>
+
+$$
+y_{\text{blend}} = \sum_k \alpha_k \, y^{(k)}.
+$$
+
+<p>That is: blending the LoRA <em>weights</em> linearly is equivalent to running each adapter separately and then linearly combining their <em>outputs</em>. This is much cheaper than running 4 forward passes — we just merge the deltas once before generation.</p>
+
+<p>From <code>inference.py:251-276</code>:</p>
+
+<pre><code>def apply_weighted_adapters(model, weights):
+    if hasattr(model, "set_adapters"):
+        model.set_adapters(ADAPTER_NAMES, weights=weights)  # PEFT does the merge
+    elif hasattr(model, "add_weighted_adapter"):
+        model.add_weighted_adapter(
+            adapters=ADAPTER_NAMES,
+            weights=weights,
+            adapter_name="turn_blend",
+            combination_type="linear",
+        )
+        model.set_adapter("turn_blend")</code></pre>
+
+<div class="callout">
+  <strong>One $\alpha$ per turn.</strong> The whole reply is generated under the <em>same</em> blend. If the user's emotion shifts mid-reply, we won't react.
+</div>
+
+<hr>
+
+<h2 id="xlora">8. X-LoRA: per-token, per-layer routing</h2>
+
+<p>X-LoRA is the more powerful sibling of the turn-level gate. Same goal — combine the four experts — but at much finer granularity:</p>
+
+<table>
+<thead>
+<tr><th>Granularity</th><th>Turn-level gate</th><th>X-LoRA</th></tr>
+</thead>
+<tbody>
+<tr><td>One $\alpha$ per…</td><td>conversation turn</td><td>token × layer × adapter</td></tr>
+<tr><td>Shape of $\alpha$</td><td>$(4,)$</td><td>$(T, L, 4)$</td></tr>
+<tr><td>Reacts mid-reply?</td><td>No</td><td>Yes — every token can re-route</td></tr>
+</tbody>
+</table>
+
+<p>Where the turn gate gives one weighted-average adapter for the whole reply, X-LoRA can say "use 80% angry-expert at layer 5 for token 3, then switch to 60% sad-expert at layer 12 for token 4."</p>
+
+<h3>The X-LoRA classifier</h3>
+
+<p>X-LoRA does <strong>two forward passes</strong> per generation step:</p>
+
+<ol>
+  <li><strong>First pass — collect features:</strong> run the input through Mistral with adapters disabled. Take the hidden states at every layer.</li>
+  <li><strong>Classifier:</strong> a small MLP on top of those hidden states predicts $g^{(\ell)}_{t, k}$ — the weight on adapter $k$ at layer $\ell$ for token $t$. Configured with <code>xlora_depth=4</code>, <code>xlora_size=2048</code>, dropout 0.1, <code>enable_softmax=True</code> (so each $(\ell, t)$ slice is a probability distribution over adapters).</li>
+  <li><strong>Second pass — generate:</strong> run the input again, but at each layer $\ell$ apply $\Delta W^{(\ell)}_t = \sum_k g^{(\ell)}_{t,k} \, B^{(k,\ell)} A^{(k,\ell)}$.</li>
+</ol>
+
+<p>The classifier is trained the same way as the turn gate — cross-entropy against the gold cluster label, with all adapter weights and the base model frozen. Only the classifier head trains.</p>
+
+<div class="callout warn">
+  <strong>Why X-LoRA can't run on 4-bit base.</strong> The classifier needs to see hidden states across all layers, and PEFT's X-LoRA hooks aren't compatible with bitsandbytes' <code>Linear4bit</code>. So system 4 must use FP16 base — see the explicit check in <code>inference.py:97-101</code>. This is more memory-hungry than QLoRA.
+</div>
+
+<hr>
+
+<h2 id="failure">9. Why the gates collapsed in your run</h2>
+
+<p>Both gating systems are giving you <strong>nearly constant outputs</strong>. The numbers prove it.</p>
+
+<h3>9.1 Turn-level gate: collapsed to a fixed prior</h3>
+
+<p>From <code>eval_results.json</code>, the <code>turn_level</code> system reports:</p>
+
+<pre><code>cluster_0_mean_alpha_0..3 ≈ (0.306, 0.356, 0.062, 0.277)
+cluster_1_mean_alpha_0..3 ≈ (0.306, 0.356, 0.062, 0.277)
+cluster_2_mean_alpha_0..3 ≈ (0.306, 0.356, 0.062, 0.277)
+cluster_3_mean_alpha_0..3 ≈ (0.306, 0.356, 0.062, 0.277)
+std_entropy ≈ 4.4e-16</code></pre>
+
+<p>Read this carefully. The four rows show the <strong>average $\alpha$ vector conditioned on each gold cluster</strong>. If the gate were sensible, you'd expect row 0 to be peaked on column 0, row 1 peaked on column 1, etc. — a near-diagonal $4 \times 4$ matrix.</p>
+
+<p>Instead, all four rows are <strong>identical</strong> to four decimal places. And the standard deviation of the entropy across examples is $4.4 \times 10^{-16}$ — that's machine epsilon, meaning entropy is constant. The gate is producing the <strong>same vector regardless of input</strong>.</p>
+
+<h3>What does that constant vector mean?</h3>
+
+<p>The MLP $z = W_2 \cdot \mathrm{ReLU}(W_1 \bar h + b_1) + b_2$ is mostly producing output dominated by the bias $b_2$ — the input-dependent piece $W_2 \cdot \mathrm{ReLU}(W_1 \bar h + b_1)$ has effectively gone to zero. Combined with softmax on $b_2$, you get a fixed distribution, which happens to be approximately the empirical class distribution of the training data (a learned <strong>prior</strong>, not a posterior).</p>
+
+<h3>Why did this happen?</h3>
+
+<ol>
+  <li><strong>Mean pooling washes out the signal.</strong> A 4096-dim vector averaged over 80+ tokens of conversation produces a feature vector that varies <em>very</em> little across different inputs — most of the variance lives at specific positions (especially the emotional cue tokens), not in the running average.</li>
+  <li><strong>Tiny training budget.</strong> 2 epochs × 2048 examples = 4096 gradient updates. For a head sitting on top of a 4096-dim feature where most of the variance is uninformative for our task, that's not enough to find the discriminative directions.</li>
+  <li><strong>Dead ReLUs.</strong> If $W_1 \bar h + b_1$ ends up mostly negative, ReLU outputs zero, gradients can't flow back, and the layer becomes a constant. This is a classic ReLU collapse.</li>
+  <li><strong>The optimizer found the easy minimum.</strong> If the gate just outputs the empirical class frequencies as a constant, the cross-entropy loss is exactly the entropy of the class distribution — about $\log 4 \approx 1.386$ for balanced data, or 1.257 for the slightly unbalanced run. To do better than that, the gate has to actually learn a function of $\bar h$. It didn't bother.</li>
+</ol>
+
+<p><strong>Consequence:</strong> the "blend" applied at inference is a fixed convex combination $\Delta W = 0.306 \Delta W^{(0)} + 0.356 \Delta W^{(1)} + 0.062 \Delta W^{(2)} + 0.277 \Delta W^{(3)}$ for every input. The system is <em>not routing</em>, it's applying the same averaged-adapter for every conversation.</p>
+
+<h3>9.2 X-LoRA: collapsed to uniform</h3>
+
+<p>From <code>eval_results.json</code>:</p>
+
+<pre><code>mean_entropy = 1.3862917
+max_entropy  = 1.3862944  (= log 4)
+std_entropy  = 4.7e-6
+all cluster_X_mean_alpha_Y ≈ 0.250</code></pre>
+
+<p>The X-LoRA classifier is outputting the uniform distribution $(\tfrac14, \tfrac14, \tfrac14, \tfrac14)$ at every $(t, \ell)$, to within numerical noise.</p>
+
+<p>Possible causes:</p>
+
+<ol>
+  <li><strong>The classifier weights weren't loaded.</strong> <code>inference.py:127</code> uses <code>load_state_dict(strict=False)</code>, which silently keeps random init for any missing keys. If the saved <code>xlora_classifier.pt</code> was empty or had mismatched keys, the classifier stays at random init, and softmax of random small numbers is close to uniform.</li>
+  <li><strong>The classifier never trained to convergence.</strong> X-LoRA's classifier has many more parameters than the turn gate (because it predicts per-layer), and it needs more data and steps.</li>
+  <li><strong>The softmax saturated to its uniform fixed point.</strong> If gradients from the four experts cancel out (because at uniform weights the merged update is the same regardless of what the classifier does), the gradient signal vanishes and the classifier sits at uniform forever. This is a known pathology of mixture-of-experts training.</li>
+</ol>
+
+<p><strong>Why uniform is the worst case for X-LoRA.</strong> When the gate is uniform across all 4 adapters at every layer and every token, the applied LoRA update is:</p>
+
+$$
+\Delta W^{(\ell)}_{\text{uniform}} = \frac{1}{4} \sum_{k=0}^{3} B^{(k,\ell)} A^{(k,\ell)}.
+$$
+
+<p>This is the <em>average</em> of four adapters, each of which was trained to specialize in a different emotion. The averaged update doesn't represent any single quadrant — it's like averaging four specialized pianists into one mediocre piano-shaped noise. Predictable result: PPL = 7,272.</p>
+
+<hr>
+
+<h2 id="fixes">10. Concrete fixes</h2>
+
+<div class="callout good">
+<strong>For the turn-level gate</strong>
+<ol>
+  <li><strong>Stop mean-pooling over neutral tokens.</strong> Try last-token pooling (use just $h_T$), or attention-weighted pooling. The emotional signal is concentrated, not uniform.</li>
+  <li><strong>Train longer.</strong> 2 → 10+ epochs, with early stopping on validation loss. Watch the loss curve — if it plateaus at $\log 4 \approx 1.386$ from the start, the gate has collapsed; restart with a higher LR or different init.</li>
+  <li><strong>Sanity check.</strong> Print $\alpha$ for 10 different inputs immediately after training. If they all match to 3 decimal places, you have the same problem and need to retrain before evaluating.</li>
+  <li><strong>Bigger LR for the head.</strong> $10^{-4}$ may be too conservative for a fresh small head with no pretrained init. Try $5 \times 10^{-4}$ or $10^{-3}$.</li>
+  <li><strong>Class weighting.</strong> If clusters aren't balanced, use <code>weight=</code> in <code>F.cross_entropy</code> so cluster 2 isn't underweighted.</li>
+</ol>
+</div>
+
+<div class="callout good">
+<strong>For X-LoRA</strong>
+<ol>
+  <li><strong>Verify the classifier actually trained.</strong> Open <code>xlora_classifier.pt</code>, check the state dict has nonzero values in classifier weights, not just init noise. Print the loss curve from notebook 03.</li>
+  <li><strong>Use <code>strict=True</code> for loading.</strong> Or at least log <code>missing</code> and <code>unexpected</code> from <code>load_state_dict</code> and fail loudly if classifier keys are missing.</li>
+  <li><strong>Add an entropy regularizer.</strong> Penalize uniform output explicitly: $\mathcal{L} += \lambda (\log K - H(\alpha))$. This pushes the classifier away from the uniform fixed point.</li>
+  <li><strong>Train longer with warmup.</strong> X-LoRA classifiers are known to need patient training — initialize at small magnitude and ramp up.</li>
+</ol>
+</div>
+
+<div class="callout">
+<strong>For the evaluation itself</strong>
+<ol>
+  <li>Re-measure <code>static_prompt</code> PPL with <code>prompt_builder=build_static_emotion_prompt</code> and <code>context_manager=adapters_disabled</code> in <code>evaluate_system</code>. The current 22,866 is a measurement artifact, not a property of the static system.</li>
+  <li>Add a "uniform blend" baseline: hard-code $\alpha = (\tfrac14, \tfrac14, \tfrac14, \tfrac14)$ for the turn-level system. If the trained gate doesn't beat that, it learned nothing useful.</li>
+  <li>Add a "perfect oracle" upper bound: $\alpha = e_y$ (one-hot on the gold cluster). This is what the gate <em>could</em> achieve and bounds the metric ceiling.</li>
+</ol>
+</div>
+
+<hr>
+
+<p style="color: var(--muted); font-size: 0.9em; text-align: center;">End of explainer. The key takeaway: gating is a 4-class classification problem dressed up as routing — and yours is currently underfit, not actively wrong. Fix the training, the routing follows.</p>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DESA — Project Explanation and Output Interpretation</title>
+<script>
+  MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true
+    },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b5cad;
+    --code-bg: #f4f4f6;
+    --border: #e1e4e8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e6e6;
+      --muted: #a0a0a0;
+      --accent: #79b8ff;
+      --code-bg: #1a1d23;
+      --border: #30363d;
+    }
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { font-size: 1.2rem; }
+  h4 { font-size: 1.05rem; color: var(--muted); }
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2rem 0;
+  }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: transparent; padding: 0; }
+  blockquote {
+    border-left: 4px solid var(--accent);
+    padding: 0.4rem 1rem;
+    margin: 1rem 0;
+    color: var(--muted);
+    background: var(--code-bg);
+  }
+  ul, ol { padding-left: 1.6rem; }
+  li { margin: 0.25rem 0; }
+  table {
+    border-collapse: collapse;
+    margin: 1rem 0;
+    width: 100%;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+  }
+  th { background: var(--code-bg); }
+  mjx-container[display="true"] { margin: 1rem 0 !important; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>DESA — Project Explanation and Output Interpretation</h1>
+
+<h2>1. The big picture</h2>
+
+<p><strong>DESA = Dynamic Emotional-State Architecture</strong> — a class project for <em>Quantitative Methods for NLP</em> (MIT, Spring 2026). The high-level idea is: instead of one monolithic empathetic chatbot, you train <strong>four small "expert" adapters</strong>, each specialized to a quadrant of emotional space, and then <strong>dynamically mix them</strong> based on the conversational context.</p>
+
+<p>The base model is <code>mistralai/Mistral-7B-Instruct-v0.2</code>. The dataset is <strong>EmpatheticDialogues</strong> (the <code>Estwld/empathetic_dialogues_llm</code> mirror), which has ~32 fine-grained emotion labels per dialogue.</p>
+
+<p>The pipeline is four notebooks (<code>01_clustering</code> → <code>02_train_adapters</code> → <code>03_train_gating</code> → <code>04_evaluation</code>), and four "systems" are evaluated against each other.</p>
+
+<hr>
+
+<h2>2. The clustering — VAD quadrants (Notebook 01)</h2>
+
+<p>Each fine-grained emotion (32 of them: <code>joyful</code>, <code>terrified</code>, <code>sad</code>, <code>excited</code>, …) is mapped to a point in <strong>NRC-VAD</strong> space: a triple $(v, a, d) \in [0,1]^3$ for <strong>valence, arousal, dominance</strong>. DESA throws away dominance and clusters using only $(v, a)$ via a <strong>deterministic threshold at 0.5</strong>:</p>
+
+$$
+\text{cluster}(v, a) = \begin{cases}
+0 & v \ge 0.5,\ a \ge 0.5 \quad \text{(positive, high-arousal: excited, joyful)} \\
+1 & v \ge 0.5,\ a < 0.5 \quad \text{(positive, low-arousal: content, grateful)} \\
+2 & v < 0.5,\ a \ge 0.5 \quad \text{(negative, high-arousal: angry, terrified)} \\
+3 & v < 0.5,\ a < 0.5 \quad \text{(negative, low-arousal: sad, lonely)}
+\end{cases}
+$$
+
+<p>The proposal had originally suggested K-means on VAD vectors, but <code>clustering.py:79-87</code> (<code>emotion_to_quadrant</code>) replaces that with the deterministic rule. This guarantees stable, semantically named clusters across machines and across re-runs (no random init drift).</p>
+
+<p>The training set is then partitioned by <code>assignments[emotion]</code>, producing four jsonl files <code>cluster_{0..3}_train.jsonl</code> with a 90/10 train/val split.</p>
+
+<hr>
+
+<h2>3. The four LoRA experts — QLoRA fine-tuning (Notebook 02)</h2>
+
+<p>For each cluster $k \in \{0,1,2,3\}$, you train a <strong>low-rank adapter</strong> on top of frozen, 4-bit-quantized Mistral.</p>
+
+<h3>LoRA math</h3>
+
+<p>For each target attention projection $W \in \mathbb{R}^{d \times d}$ (specifically <code>q_proj</code>, <code>k_proj</code>, <code>v_proj</code>, <code>o_proj</code>), LoRA replaces the forward pass:</p>
+
+$$
+y = W x \;\;\longrightarrow\;\; y = W x + \frac{\alpha}{r} \, B A x,
+$$
+
+<p>where $A \in \mathbb{R}^{r \times d}$, $B \in \mathbb{R}^{d \times r}$ are trainable, and $\Delta W = BA$ is a rank-$r$ update. From <code>configs/qlora_config.yaml</code> you have $r = 16$, $\alpha = 32$, so the scale factor is $\alpha/r = 2$. Dropout 0.05 on the LoRA path, no bias terms.</p>
+
+<h3>QLoRA twist</h3>
+
+<p>The base $W$ is frozen and stored in <strong>NF4</strong> (a 4-bit normal-float quantization), with <code>bnb_4bit_compute_dtype: float16</code>. Dequantization happens just-in-time for the matmul. The trainable LoRA params are deliberately cast back to <strong>fp32</strong> in <code>train_adapter.py:150</code> (<code>cast_trainable_parameters_to_fp32</code>) so AMP gradient scaling works cleanly — a known gotcha when mixing bitsandbytes with HF Trainer's BF16/FP16 paths.</p>
+
+<h3>Loss</h3>
+
+<p>Standard causal-LM next-token cross-entropy on chat-templated turns. Each conversation produces one SFT example per assistant utterance via <code>conversation_to_sft_texts</code>. Training: 3 epochs, lr $2 \times 10^{-4}$, cosine schedule, effective batch size 16 (= 2 × 8 grad-accum), cap of 4000 examples per cluster, max_seq_length 512.</p>
+
+<p>The result of step 02 is four directories <code>outputs/adapter_cluster_{k}/final/</code> containing $\{A^{(k)}, B^{(k)}\}$ for each of the four target modules at each transformer layer.</p>
+
+<hr>
+
+<h2>4. The gating heads (Notebook 03)</h2>
+
+<p>Now you have four experts. The interesting question: at inference time, <strong>how do you decide how to combine them</strong>? The project trains two gating mechanisms.</p>
+
+<h3>4.1 Turn-level gate (<code>gating.py:19-47</code>)</h3>
+
+<p>This is one shared gate that, given the conversation context $x$, outputs a single 4-vector of mixing weights for the whole reply. It's trained as a 4-class classifier targeting the gold cluster.</p>
+
+<p>Let $h \in \mathbb{R}^{T \times d}$ be the <strong>last hidden state</strong> of the frozen base model (Mistral, $d = 4096$) over the prompt. Mean-pool with the attention mask:</p>
+
+$$
+\bar h = \frac{\sum_{t=1}^T m_t \, h_t}{\sum_{t=1}^T m_t}, \qquad m_t \in \{0, 1\}.
+$$
+
+<p>Then a small MLP head:</p>
+
+$$
+g(\bar h) = \mathrm{softmax}\!\left( W_2 \cdot \mathrm{ReLU}(W_1 \bar h) \right) \in \Delta^3,
+$$
+
+<p>with $W_1 \in \mathbb{R}^{1024 \times 4096}$, $W_2 \in \mathbb{R}^{4 \times 1024}$, dropout 0.1. (The bottleneck dim is <code>hidden_dim // 4</code> = 1024.)</p>
+
+<p>Trained with cross-entropy against the gold cluster $y \in \{0,1,2,3\}$ derived from <code>cluster_assignments</code>:</p>
+
+$$
+\mathcal{L}_{\text{turn}} = - \log g(\bar h)_{y}.
+$$
+
+<p>2 epochs, AdamW, lr $10^{-4}$, balanced sampling of 512 examples per cluster.</p>
+
+<p><strong>Then at inference</strong> (<code>inference.py:251-276</code>), the predicted weights $\alpha = g(\bar h)$ are pushed into PEFT's weighted-adapter API:</p>
+
+$$
+\Delta W_{\text{blend}} = \sum_{k=0}^{3} \alpha_k \, \Delta W^{(k)} = \sum_k \alpha_k \, B^{(k)} A^{(k)}.
+$$
+
+<p>So the LoRA delta applied during generation is a convex combination of the four cluster experts.</p>
+
+<h3>4.2 X-LoRA — token- and layer-level gating (Notebook 03 cont., <code>inference.py:90-129</code>)</h3>
+
+<p>This is the more ambitious "Mixture of LoRA Experts" approach using PEFT's native <code>XLoraConfig</code>. Instead of one global $\alpha$, you get a scalar <strong>per token, per layer, per adapter</strong>:</p>
+
+$$
+\Delta W^{(\ell)}_{t} = \sum_{k=0}^{3} g^{(\ell)}_{t,k} \, B^{(k,\ell)} A^{(k,\ell)},
+$$
+
+<p>where $g^{(\ell)}_{t,k}$ comes from a small classifier on top of frozen Mistral with <code>xlora_depth=4</code>, <code>xlora_size=2048</code>, dropout 0.1, <code>enable_softmax=True</code>, <code>layerwise_scalings=True</code>. The classifier produces a tensor of shape <code>(batch, seq_len, n_layers, n_adapters)</code>.</p>
+
+<p>A subtle constraint enforced in <code>inference.py:97-101</code>: PEFT's X-LoRA path is incompatible with bitsandbytes 4-bit linears, so for system 4 the base must be loaded <strong>unquantized in FP16</strong>.</p>
+
+<h3>4.3 The VAD stretch goal (<code>gating.py:50-65</code>)</h3>
+
+<p>Not used in evaluation. It would route based on a tracked VAD state with an EMA "emotional inertia": $\mathbf{v}_t = (1-\mu) \mathbf{v}_t^{\text{cur}} + \mu \mathbf{v}_{t-1}$, comparing to learned per-adapter prototypes via cosine similarity, then softmax. Stretch goal — not wired into inference.</p>
+
+<hr>
+
+<h2>5. The four systems being compared (Notebook 04)</h2>
+
+<ol>
+  <li><strong><code>static_prompt</code></strong> — vanilla Mistral with a hand-written system message that names the gold emotion; <strong>all adapters disabled</strong>. Baseline.</li>
+  <li><strong><code>argmax_adapter</code></strong> — set adapter to <code>cluster_{assignments[gold_emotion]}</code>. Cheats by using the gold label, no learned routing.</li>
+  <li><strong><code>turn_level</code></strong> — turn gate predicts $\alpha$, weighted blend applied via <code>add_weighted_adapter</code> / <code>set_adapters</code>, single $\alpha$ for the whole reply.</li>
+  <li><strong><code>token_level_xlora</code></strong> — full X-LoRA, one mixture per token per layer.</li>
+</ol>
+
+<hr>
+
+<h2>6. The metrics and their math</h2>
+
+<ul>
+  <li><strong>Gold-response perplexity</strong> (<code>evaluate.py:111-149</code>): for each test example, build prompt = full history minus last assistant turn, response = last assistant turn. Mask prompt tokens with <code>-100</code> so they're excluded from the loss, encode <code>[prompt | response | eos]</code>, and compute</li>
+</ul>
+
+$$
+\mathrm{PPL} = \exp\!\left(\frac{1}{N}\sum_{i=1}^{N} -\log p_\theta(y_i \mid y_{<i}, x)\right).
+$$
+
+<p>Lower = the model finds the gold response less surprising. The token count $N$ is summed across the whole test slice — this is a corpus-level PPL, not a per-example mean.</p>
+
+<ul>
+  <li><strong>Distinct-1 / Distinct-2</strong> (lexical diversity):</li>
+</ul>
+
+$$
+\text{Distinct-}n = \frac{|\{\text{unique } n\text{-grams in all generations}\}|}{|\{\text{total } n\text{-grams in all generations}\}|}.
+$$
+
+<p>Higher = less repetitive.</p>
+
+<ul>
+  <li><strong>Emotion accuracy</strong>: pipe each generation into <code>j-hartmann/emotion-english-distilroberta-base</code> (a 7-way classifier: anger, disgust, fear, joy, sadness, surprise, neutral). Map the gold ED-32 label down to the same 7-way space via <code>EMOTION_TO_BROAD</code>, then count exact matches.</li>
+  <li><strong>Gating entropy</strong>: $H(\alpha) = -\sum_k \alpha_k \log \alpha_k$, max $= \log 4 \approx 1.3863$. Reports mean and std across the test set.</li>
+  <li><strong>Gating alignment</strong> (<code>gating_alignment</code>): the average mass placed on the gold cluster, $\overline{\alpha_{y}} = \frac{1}{N}\sum_i \alpha^{(i)}_{y_i}$. Uniform random would give $0.25$.</li>
+</ul>
+
+<p>Per-cluster alpha breakdowns (<code>cluster_X_mean_alpha_Y</code>) condition on gold class $X$ and report mean weight on adapter $Y$. A perfect gate would be a $4 \times 4$ identity: row $X$ peaked on column $X$.</p>
+
+<hr>
+
+<h2>7. Reading the actual results</h2>
+
+<table>
+<thead>
+<tr><th>System</th><th>PPL ↓</th><th>Dist-1</th><th>Dist-2</th><th>EmoAcc</th></tr>
+</thead>
+<tbody>
+<tr><td><code>static_prompt</code></td><td>22865.9</td><td>0.127</td><td>0.416</td><td><strong>0.760</strong></td></tr>
+<tr><td><code>argmax_adapter</code></td><td>39.1</td><td>0.277</td><td><strong>0.701</strong></td><td>0.295</td></tr>
+<tr><td><code>turn_level</code></td><td><strong>30.7</strong></td><td><strong>0.281</strong></td><td>0.660</td><td>0.225</td></tr>
+<tr><td><code>token_level_xlora</code></td><td>7272.5</td><td>0.185</td><td>0.477</td><td>0.170</td></tr>
+</tbody>
+</table>
+
+<p>This table is full of red flags. Let me work through them.</p>
+
+<h3>7.1 Why is <code>static_prompt</code> PPL = 22,866?</h3>
+
+<p>That's astronomical — it implies the model assigns near-zero probability to gold tokens. The cause is almost certainly a <strong>prompt-format mismatch</strong>: <code>static_prompt</code>'s <strong>generation</strong> prompt embeds the conversation inside an instruction-style "You are an empathetic assistant…" wrapper (<code>inference.py:177-187</code>), but its <strong>perplexity</strong> is computed via the default <code>_prompt_and_gold</code> path in <code>evaluate.py:83-86</code>, which just chat-templates the history. So the PPL number for <code>static_prompt</code> is <em>not</em> measuring the static system — it's measuring whatever adapter happened to be active on the multi-adapter PEFT model when this row was evaluated, against a plain prompt. The huge value is consistent with an adapter being mid-blended or mis-set rather than disabled. If you want a fair PPL, <code>evaluate_system</code> for <code>static_prompt</code> should be invoked with <code>prompt_builder=build_static_emotion_prompt</code> and <code>context_manager=adapters_disabled</code>.</p>
+
+<p>(<code>static_prompt</code> does win on emotion accuracy — 0.76 vs ~0.2 for the others. That's because with an explicit "respond with emotion = {gold}" instruction, the off-the-shelf classifier easily picks up the requested tone. But this is a near-cheating signal, not capability.)</p>
+
+<h3>7.2 The cluster-adapter systems crush PPL (39 and 31)</h3>
+
+<p>Both <code>argmax_adapter</code> and <code>turn_level</code> get PPL in the 30–40 range — three orders of magnitude better than the static baseline as measured. Two interpretations:</p>
+
+<ul>
+  <li><strong>Real</strong>: the adapters genuinely fit the EmpatheticDialogues distribution, so the gold response is much less surprising once you condition on a cluster expert.</li>
+  <li><strong>Format effect</strong>: if the static row was inflated by a prompt mismatch, the "fair" gap would be smaller. But even after fixing that, you'd expect the QLoRA-finetuned models to win on PPL — that's exactly what fine-tuning on the train distribution does.</li>
+</ul>
+
+<p>Distinct-1/2 also doubles for the adapter systems (~0.28 / ~0.66 vs 0.13 / 0.42). The base model is more repetitive in this scoring; the fine-tunes produce more lexical variety, possibly because QLoRA at lr 2e-4 nudges the model toward the somewhat varied EmpatheticDialogues style.</p>
+
+<p>Lower emotion accuracy for the adapter systems (0.23–0.30) is the interesting failure mode: <strong>PPL good, vibe-matching worse</strong>. Without an explicit emotion prompt, the response style isn't always pegged to the gold quadrant. This is exactly what DESA's gating is supposed to fix.</p>
+
+<h3>7.3 The turn-level gate has collapsed</h3>
+
+<p>Look at the per-cluster mean-alpha blocks. All four rows are nearly identical:</p>
+
+$$
+\bar{\alpha}\,\big|\,\text{cluster } 0..3 \;\approx\; (0.306,\ 0.356,\ 0.062,\ 0.277).
+$$
+
+<p>The gate is producing the <strong>same vector regardless of input</strong>. Two pieces of corroborating evidence:</p>
+
+<ul>
+  <li><code>std_entropy ≈ 4.4 × 10⁻¹⁶</code> — that's machine epsilon. Entropy is <strong>constant</strong> across all examples.</li>
+  <li><code>mean_entropy = 1.257</code> is below $\log 4 = 1.386$, consistent with the constant vector $(0.306, 0.356, 0.062, 0.277)$:</li>
+</ul>
+
+$$
+H = -\sum_k \alpha_k \log \alpha_k \approx -(0.306 \log 0.306 + 0.356 \log 0.356 + 0.062 \log 0.062 + 0.277 \log 0.277) \approx 1.257.
+$$
+
+<p>Yes — the math confirms the gate is outputting that constant vector for every prompt. It learned a <strong>prior</strong> over clusters, not a context-conditional posterior.</p>
+
+<p>Why? Likely culprits:</p>
+
+<ol>
+  <li>The mean-pool over a long prompt washes out the emotional signal — the classifier ends up on a near-constant pooled feature.</li>
+  <li>Only 2 epochs at lr $10^{-4}$ over 4 × 512 = 2048 examples may not be enough for a head sitting on top of a frozen 4096-dim feature.</li>
+  <li>The MLP collapsed because input variation is small relative to the bias terms.</li>
+</ol>
+
+<p><code>gold_cluster_mass = 0.227</code>, <strong>below</strong> uniform 0.25. With a constant $\alpha$, the expected gold mass is $\sum_c P(\text{gold}=c) \cdot \alpha_c$. The gate assigns only 0.062 to cluster 2 (<code>negative_high_arousal</code>), and any test example from that cluster drags the average below 0.25.</p>
+
+<p><strong>Bottom line:</strong> the turn-level system gets its low PPL essentially by accident — it's doing roughly a fixed convex combination of all four adapters that happens to hold up. It is <strong>not routing</strong>.</p>
+
+<h3>7.4 X-LoRA is also collapsed — toward uniform</h3>
+
+<pre><code>mean_entropy   = 1.3862917
+max_entropy    = 1.3862944   (= log 4)
+std_entropy    = 4.7e-6
+</code></pre>
+
+<p>This is <strong>maximum entropy at machine precision</strong>: the X-LoRA classifier is outputting $(\tfrac14, \tfrac14, \tfrac14, \tfrac14)$ per token, per layer. The per-cluster alphas confirm it — every entry is 0.249–0.250.</p>
+
+<p>That implies the X-LoRA classifier head was either (a) never actually trained — <code>xlora_classifier.pt</code> may just be an init checkpoint — or (b) trained but with the softmax saturated to the uniform fixed point. Given how X-LoRA works (it sums <strong>all four</strong> adapter deltas at every layer at every token), a uniform gate is essentially the worst case: you're applying</p>
+
+$$
+\Delta W^{(\ell)}_{\text{xlora-uniform}} = \frac{1}{4} \sum_{k=0}^{3} B^{(k,\ell)} A^{(k,\ell)},
+$$
+
+<p>which is the average of four adapters that were each trained to specialize in a different emotion. The result is a low-rank update that doesn't represent any single quadrant — predictably destroying perplexity. PPL = 7,272 is exactly what you'd expect.</p>
+
+<h3>7.5 What the numbers tell the proposal</h3>
+
+<ul>
+  <li><strong>Adapters work.</strong> The QLoRA fine-tunes individually fit EmpatheticDialogues well (PPL 39 with the gold-cluster expert).</li>
+  <li><strong>Routing does not yet work.</strong> Both gating mechanisms degenerated:
+    <ul>
+      <li>The turn gate collapsed to a fixed prior — mean-pool + small-data CE didn't produce input dependence.</li>
+      <li>X-LoRA collapsed to uniform — its classifier likely wasn't trained to convergence (or wasn't loaded), and X-LoRA at uniform weights is worse than picking any single adapter.</li>
+    </ul>
+  </li>
+  <li><strong>The adapter systems lose on emotion accuracy</strong> because the final reply doesn't carry an explicit emotion cue. With routing fixed, this is the metric that should rise toward <code>static_prompt</code>'s 0.76 while keeping PPL low.</li>
+</ul>
+
+<hr>
+
+<h2>8. Concrete fixes the numbers point to</h2>
+
+<p>If you want to make the comparison fair and the gating actually do something:</p>
+
+<ol>
+  <li><strong>Re-run <code>static_prompt</code> PPL</strong> with the same prompt builder used at generation (<code>build_static_emotion_prompt</code>) and inside <code>adapters_disabled</code>. The current 22,866 is misleading.</li>
+  <li><strong>Diagnose the turn gate.</strong> Check whether <code>turn_gate.pt</code> predictions vary across batches — print $\alpha$ for ten different prompts. If they're identical, retrain with: more epochs (≥10), use the gold emotion's pooled hidden state rather than mean-pool over the whole prompt, or use a class-balanced loss with label smoothing.</li>
+  <li><strong>X-LoRA classifier</strong> — verify it actually trained (loss curve in notebook 03), and that <code>xlora_classifier.pt</code> contains a non-trivial state dict (not just init). If the classifier state never made it in, <code>load_state_dict(strict=False)</code> would silently leave it at random init, then the softmax would converge to uniform.</li>
+  <li>The X-LoRA path is also incompatible with 4-bit base (enforced at <code>inference.py:97-101</code>), which means it ran in FP16 — confirm this in the notebook to rule out memory-related truncation.</li>
+</ol>
+
+</main>
+</body>
+</html>

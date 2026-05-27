@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DESA — Transformers, Variable Length, and Per-Layer LoRA Routing</title>
+<script>
+  MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true
+    },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b5cad;
+    --accent-soft: #e7f0fa;
+    --code-bg: #f4f4f6;
+    --border: #e1e4e8;
+    --warn-bg: #fff8e1;
+    --warn-border: #f0c419;
+    --good-bg: #e8f5e9;
+    --good-border: #4caf50;
+    --layer0: #fef3c7;
+    --layer1: #fde68a;
+    --layer2: #fcd34d;
+    --layer3: #fbbf24;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e6e6;
+      --muted: #a0a0a0;
+      --accent: #79b8ff;
+      --accent-soft: #1e2a3a;
+      --code-bg: #1a1d23;
+      --border: #30363d;
+      --warn-bg: #2a2410;
+      --warn-border: #d4a017;
+      --good-bg: #143018;
+      --good-border: #2e7d32;
+      --layer0: #3a2f12;
+      --layer1: #4a3a14;
+      --layer2: #5a4516;
+      --layer3: #6a5018;
+    }
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    margin: 0;
+  }
+  main {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.55rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; margin-top: 3rem; }
+  h3 { font-size: 1.2rem; }
+  h4 { font-size: 1.05rem; color: var(--muted); }
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    font-size: 0.9em;
+  }
+  pre code { background: transparent; padding: 0; }
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-left-color: var(--warn-border); background: var(--warn-bg); }
+  .callout.good { border-left-color: var(--good-border); background: var(--good-bg); }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  ul, ol { padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  table {
+    border-collapse: collapse;
+    margin: 1rem 0;
+    width: 100%;
+    font-size: 0.95em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+  }
+  th { background: var(--code-bg); }
+  mjx-container[display="true"] { margin: 1rem 0 !important; }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .toc ul { margin: 0.3rem 0; }
+  .diagram {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1.2rem 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    white-space: pre;
+    overflow-x: auto;
+    line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Transformers, Variable Length, and Per-Layer LoRA Routing</h1>
+
+<p style="color: var(--muted)">A follow-up to the gating explainer. Two questions: <em>"why mean-pool the gate's input — transformers don't need fixed lengths?"</em> and <em>"what does it mean for X-LoRA to route per layer?"</em></p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#bigq">1. Your question, sharpened</a></li>
+    <li><a href="#shapes">2. The shape problem: variable length vs fixed-size head</a></li>
+    <li><a href="#transformer">3. How a transformer actually works</a>
+      <ul>
+        <li><a href="#tokens">3.1 Tokens and embeddings</a></li>
+        <li><a href="#attention">3.2 Self-attention — the magic ingredient</a></li>
+        <li><a href="#why-vlength">3.3 Why attention handles any sequence length</a></li>
+        <li><a href="#stack">3.4 The full transformer block</a></li>
+      </ul>
+    </li>
+    <li><a href="#alternatives">4. Pooling alternatives the gate <em>could</em> use</a></li>
+    <li><a href="#causal-trick">5. The "use the last token" shortcut</a></li>
+    <li><a href="#layers">6. What "by layer" means</a></li>
+    <li><a href="#lora-per-layer">7. LoRA lives at every layer</a></li>
+    <li><a href="#xlora-explained">8. X-LoRA decoded: token × layer × adapter</a></li>
+    <li><a href="#why-it-helps">9. Why per-layer routing could matter</a></li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="bigq">1. Your question, sharpened</h2>
+
+<p>You noticed: transformers process variable-length sequences just fine. Mistral happily takes 5 tokens or 500. So <strong>why does the gating head need a fixed-size input</strong> (and therefore mean pooling)? Couldn't we just feed the same variable-length representation the transformer uses?</p>
+
+<p>The answer is yes-and-no, and unpacking it forces us to look at <em>how</em> transformers handle variable length, which is exactly what self-attention does well. After that we can talk about layers.</p>
+
+<hr>
+
+<h2 id="shapes">2. The shape problem: variable length vs fixed-size head</h2>
+
+<p>The gating head is an <strong>MLP</strong>. Its first layer is a matrix multiply $W_1 \bar h$, with $W_1 \in \mathbb{R}^{1024 \times 4096}$. For matrix multiplication to work, the input $\bar h$ has to be a vector of <strong>exactly 4096 numbers</strong> — not a matrix of $T \times 4096$ where $T$ varies.</p>
+
+<p>Mistral, in contrast, processes any $T$ because its core operation isn't a single big matrix multiply against a fixed-shape parameter — it's <strong>self-attention</strong>, which is shape-polymorphic. Let's see why.</p>
+
+<hr>
+
+<h2 id="transformer">3. How a transformer actually works</h2>
+
+<h3 id="tokens">3.1 Tokens and embeddings</h3>
+
+<p>Step one: text becomes integers (token IDs).</p>
+
+<div class="diagram">"I just got promoted!"
+       │
+       ▼ tokenizer
+    [ 1, 314, 1444, 4738, 13821, 28808 ]   ← T = 6 token IDs
+       │
+       ▼ embedding lookup (table E ∈ R^{V × d}, V = vocab size, d = 4096)
+    h⁰ ∈ R^{6 × 4096}                       ← T rows of d-dimensional vectors</div>
+
+<p>The embedding is a learned lookup: each token ID indexes a row of an embedding matrix $E$, giving a $d=4096$-dimensional vector. Stacking $T$ such vectors gives a $T \times d$ matrix $h^{0}$. The superscript means "after layer 0," i.e., before any transformer block.</p>
+
+<p>Notice: $T$ can be anything. The embedding table doesn't care how many lookups you do.</p>
+
+<p>(Position information is added on top — Mistral uses Rotary Position Embeddings, RoPE, baked into the attention computation. Skip the details.)</p>
+
+<h3 id="attention">3.2 Self-attention — the magic ingredient</h3>
+
+<p>Self-attention takes a $T \times d$ matrix $h$ and produces another $T \times d$ matrix where each row is a <strong>context-aware</strong> mix of all the input rows.</p>
+
+<p>Mechanically, three projections (these are the LoRA targets!):</p>
+
+$$
+Q = h W_Q, \quad K = h W_K, \quad V = h W_V, \qquad W_Q, W_K, W_V \in \mathbb{R}^{d \times d}.
+$$
+
+<p>So $Q, K, V$ are each $T \times d$. Then attention is computed as:</p>
+
+$$
+\mathrm{Attn}(Q, K, V) = \mathrm{softmax}\!\left( \frac{Q K^\top}{\sqrt{d}} \right) V \in \mathbb{R}^{T \times d}.
+$$
+
+<p>What does this <em>do</em>?</p>
+
+<ul>
+  <li>$Q K^\top$ is a $T \times T$ matrix. Entry $(i, j)$ measures <strong>how much token $i$ should attend to token $j$</strong> (a dot product of token $i$'s "query" with token $j$'s "key").</li>
+  <li>The softmax normalizes each row to a probability distribution over the $T$ positions. Row $i$: "of all positions, how much weight do I put on each when summarizing my context?"</li>
+  <li>Multiplying by $V$ produces a weighted sum of the value vectors — the output at position $i$ is a context-aware blend of all positions.</li>
+</ul>
+
+<h4>Tiny worked example, $T=3, d=2$</h4>
+
+<p>Suppose $Q = K = V = \begin{bmatrix} 1 & 0 \\ 0 & 1 \\ 1 & 1 \end{bmatrix}$ (3 tokens, 2 dims; just for arithmetic).</p>
+
+$$
+QK^\top = \begin{bmatrix} 1 & 0 & 1 \\ 0 & 1 & 1 \\ 1 & 1 & 2 \end{bmatrix}.
+$$
+
+<p>Apply softmax row-wise (skipping the $\sqrt{d}$ for clarity):</p>
+
+$$
+A = \mathrm{softmax}(QK^\top) \approx \begin{bmatrix} 0.42 & 0.16 & 0.42 \\ 0.16 & 0.42 & 0.42 \\ 0.21 & 0.21 & 0.58 \end{bmatrix}.
+$$
+
+<p>Each row sums to 1 — it's a distribution. Then $A V$ produces a $T \times d$ output where each row is $A_i \cdot V$ — a weighted average of $V$'s rows.</p>
+
+<p>Token 3 (last row of $A$) gives 58% weight to itself and 21% each to tokens 1 and 2. <strong>That's the "context aggregation" baked into a single layer.</strong></p>
+
+<h3 id="why-vlength">3.3 Why attention handles any sequence length</h3>
+
+<p>Look at the shapes:</p>
+
+<table>
+<thead><tr><th>Object</th><th>Shape</th><th>Depends on $T$?</th></tr></thead>
+<tbody>
+<tr><td>$h$</td><td>$T \times d$</td><td>yes (varies)</td></tr>
+<tr><td>$W_Q, W_K, W_V$</td><td>$d \times d$</td><td>no (fixed)</td></tr>
+<tr><td>$Q, K, V$</td><td>$T \times d$</td><td>yes</td></tr>
+<tr><td>$QK^\top$</td><td>$T \times T$</td><td>yes</td></tr>
+<tr><td>output</td><td>$T \times d$</td><td>yes</td></tr>
+</tbody>
+</table>
+
+<p><strong>The parameters are all $d \times d$ — fixed shape.</strong> Only the activations grow with $T$. The matrix multiplications still work no matter what $T$ is, because matrix multiplication broadcasts over the sequence dimension.</p>
+
+<p>Compare with our gating MLP:</p>
+
+<table>
+<thead><tr><th>Object</th><th>Shape</th></tr></thead>
+<tbody>
+<tr><td>$W_1$</td><td>$1024 \times 4096$</td></tr>
+<tr><td>required input</td><td>$\mathbb{R}^{4096}$ — exactly one vector</td></tr>
+</tbody>
+</table>
+
+<p>The MLP <em>could</em> be applied to each row of the $T \times 4096$ matrix independently — that would produce a $T \times 4$ output. But our supervision signal is one cluster label per conversation, not per token. We need a single 4-vector for the whole conversation. <strong>Hence the pooling step.</strong></p>
+
+<div class="callout">
+  <strong>The clean way to phrase it:</strong> the transformer outputs a representation per token (variable length). We want a representation per conversation (fixed = one). Pooling is the bridge from many to one.
+</div>
+
+<h3 id="stack">3.4 The full transformer block</h3>
+
+<p>One transformer "block" or "layer" does this:</p>
+
+<div class="diagram">           input h^{ℓ-1}  (shape T × d)
+                │
+                ▼
+    ┌─────────────────────────────┐
+    │  LayerNorm                  │
+    │       │                     │
+    │       ▼                     │
+    │  Multi-head Self-Attention  │   ← uses W_Q^ℓ, W_K^ℓ, W_V^ℓ, W_O^ℓ
+    │       │                     │
+    │       ▼                     │
+    │  + (residual)  ◄── h^{ℓ-1}  │
+    │       │                     │
+    │       ▼                     │
+    │  LayerNorm                  │
+    │       │                     │
+    │       ▼                     │
+    │  Feed-Forward (MLP)         │   ← uses W_up^ℓ, W_down^ℓ
+    │       │                     │
+    │       ▼                     │
+    │  + (residual)               │
+    └─────────────────────────────┘
+                │
+                ▼
+           output h^ℓ  (shape T × d)</div>
+
+<p>Two sub-modules: <strong>self-attention</strong> and a <strong>feed-forward network</strong> (a 2-layer MLP applied per-token). Residual connections (the "+" arrows) help gradients flow. Layer normalization stabilizes training.</p>
+
+<p>The crucial point for what comes next: the <strong>same block structure repeats</strong> $L$ times — Mistral-7B has $L = 32$ layers. Each layer has its own copy of the parameters $W_Q^\ell, W_K^\ell, W_V^\ell, W_O^\ell$ and the FFN weights. The hidden state $h^\ell$ evolves layer by layer.</p>
+
+<hr>
+
+<h2 id="alternatives">4. Pooling alternatives the gate <em>could</em> use</h2>
+
+<p>Now that we've seen the transformer's output is $h \in \mathbb{R}^{T \times d}$, the question becomes: <em>which</em> single vector do we feed into the gate? There's no need to mean-pool — that's just one choice. Here are the common options:</p>
+
+<table>
+<thead>
+<tr><th>Method</th><th>Formula</th><th>Pros</th><th>Cons</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>Mean pool</strong> (current)</td>
+  <td>$\bar h = \tfrac{1}{T}\sum_t h_t$</td>
+  <td>simple, robust to position</td>
+  <td>dilutes localized signals (e.g. emotional cue tokens get washed out)</td>
+</tr>
+<tr>
+  <td><strong>Last-token</strong></td>
+  <td>$\bar h = h_T$</td>
+  <td>in causal LMs, $h_T$ has seen everything; matches generation conditioning</td>
+  <td>relies on model concentrating info at the end</td>
+</tr>
+<tr>
+  <td><strong>First-token / CLS</strong></td>
+  <td>$\bar h = h_1$</td>
+  <td>standard for BERT-style classification</td>
+  <td>causal Mistral has no CLS; first token sees nothing</td>
+</tr>
+<tr>
+  <td><strong>Attention pool</strong></td>
+  <td>$\bar h = \sum_t a_t h_t$, $a_t$ learned</td>
+  <td>focuses on the informative tokens</td>
+  <td>more parameters; another thing that can collapse</td>
+</tr>
+<tr>
+  <td><strong>Max pool</strong></td>
+  <td>$\bar h_d = \max_t h_{t,d}$</td>
+  <td>preserves peaks</td>
+  <td>discards everything but the max</td>
+</tr>
+</tbody>
+</table>
+
+<div class="callout warn">
+  Your DESA gate uses mean pool. Given how the gate has collapsed (see previous explainer §9), <strong>switching to last-token or attention pool is one of the highest-leverage fixes</strong>. The emotional content of <em>"I just got fired and I don't know what to do"</em> lives at specific words, not in the average.
+</div>
+
+<hr>
+
+<h2 id="causal-trick">5. The "use the last token" shortcut — a powerful detail</h2>
+
+<p>Mistral is a <strong>causal</strong> language model: token $t$ only attends to tokens $1, \dots, t$, never to the future. A direct consequence: $h_T$ — the hidden state at the final position — has aggregated information from <em>every</em> previous token through self-attention.</p>
+
+<p>So in a causal LM, last-token pooling is essentially free summary aggregation:</p>
+
+$$
+\bar h_{\text{last}} = h_T \quad \in \mathbb{R}^{4096}, \quad \text{contains context about all of } 1..T.
+$$
+
+<p>This is why instruction-tuned causal LMs are often used as embedders by just grabbing the last hidden state. It often beats mean pooling, especially for variable-length text.</p>
+
+<p>Both approaches solve the same shape problem (turn $T \times d$ into $d$). They differ in <em>where</em> the summary signal lives.</p>
+
+<hr>
+
+<h2 id="layers">6. What "by layer" means</h2>
+
+<p>Recall: Mistral-7B is a stack of <strong>32 transformer blocks</strong>, indexed $\ell = 1, \dots, 32$. The hidden state evolves as you go up the stack:</p>
+
+<div class="diagram">                 top of model
+
+  layer 32  h³² ──── output projection ──── token logits → next-word prediction
+            ▲
+            │
+  layer 31  h³¹
+            ▲
+            │
+            ⋮
+            ▲
+            │
+  layer 2   h²
+            ▲
+            │
+  layer 1   h¹
+            ▲
+            │
+  layer 0   h⁰ = embedding(tokens)
+
+                bottom of model</div>
+
+<p>What does each layer "do"? It's not perfectly understood, but a robust empirical pattern across many transformer studies:</p>
+
+<table>
+<thead><tr><th>Depth</th><th>Tends to encode</th></tr></thead>
+<tbody>
+<tr><td>Bottom layers (1–8 of 32)</td><td>Token-level / surface features: morphology, syntax, local patterns, "what word is this".</td></tr>
+<tr><td>Middle layers (~9–22)</td><td>Sentence structure, grammatical relations, coreference.</td></tr>
+<tr><td>Top layers (~23–32)</td><td>Task-relevant semantics, abstract meaning, "what should come next".</td></tr>
+</tbody>
+</table>
+
+<p>Concretely, at each layer the model has:</p>
+
+$$
+h^\ell = h^{\ell-1} + \text{Attn}^\ell(\text{LN}(h^{\ell-1})) + \text{FFN}^\ell(\text{LN}(\cdot))
+$$
+
+<p>where $\text{Attn}^\ell$ uses its <em>own</em> $W_Q^\ell, W_K^\ell, W_V^\ell, W_O^\ell$ matrices. Each layer has its own ~64M parameters; in total, the 32 layers contain most of Mistral's 7B parameters.</p>
+
+<div class="callout">
+  <strong>Key fact:</strong> "layer" doesn't mean "step in time" or "step through the sequence." It means <strong>depth in the network</strong>. All $T$ tokens go through layer 1, then all $T$ tokens go through layer 2, and so on. The matrix $h^\ell \in \mathbb{R}^{T \times d}$ exists at every depth $\ell$.
+</div>
+
+<hr>
+
+<h2 id="lora-per-layer">7. LoRA lives at every layer</h2>
+
+<p>Now back to LoRA. The config in <code>configs/qlora_config.yaml</code> says:</p>
+
+<pre><code>target_modules:
+  - "q_proj"   # the W_Q matrix
+  - "k_proj"   # the W_K matrix
+  - "v_proj"   # the W_V matrix
+  - "o_proj"   # the output projection W_O after attention</code></pre>
+
+<p>For each transformer block, LoRA inserts an adapter on each of these four matrices. Since there are 32 blocks, that means each cluster expert has:</p>
+
+$$
+4 \text{ matrices} \times 32 \text{ layers} = 128 \text{ LoRA adapter pairs } (A, B) \text{ per cluster.}
+$$
+
+<p>Each $(A, B)$ has $r \cdot d + d \cdot r = 2dr$ parameters. With $d = 4096, r = 16$:</p>
+
+$$
+2 \cdot 4096 \cdot 16 = 131{,}072 \text{ params per adapter pair.}
+$$
+
+<p>Times 128: about <strong>16.8M trainable params per cluster expert</strong>. Times 4 clusters: ~67M trainable params total — about 1% of Mistral's 7B.</p>
+
+<p>The point: when we say "the cluster-0 LoRA expert," we don't mean a single adapter — we mean <strong>128 small adapters</strong> sprinkled throughout the network, one at each $(W_Q, W_K, W_V, W_O)$ at each of the 32 layers.</p>
+
+<div class="diagram">                cluster-0 expert        cluster-1 expert      ...      cluster-3 expert
+                ────────────────        ────────────────                ────────────────
+layer 32   q,k,v,o LoRA pairs       q,k,v,o LoRA pairs                 q,k,v,o LoRA pairs
+layer 31   q,k,v,o LoRA pairs       q,k,v,o LoRA pairs                 q,k,v,o LoRA pairs
+   ⋮              ⋮                       ⋮                                  ⋮
+layer  2   q,k,v,o LoRA pairs       q,k,v,o LoRA pairs                 q,k,v,o LoRA pairs
+layer  1   q,k,v,o LoRA pairs       q,k,v,o LoRA pairs                 q,k,v,o LoRA pairs
+
+           4 × 32 = 128 pairs       128 pairs                          128 pairs</div>
+
+<p>For the <strong>turn-level gate</strong>, all 128 adapter pairs in a given expert are turned on with the <em>same</em> weight $\alpha_k$. So if $\alpha_0 = 0.6$, every one of cluster-0's 128 adapter pairs is scaled by 0.6 throughout the network. One scalar per expert; that scalar is reused at every layer.</p>
+
+<hr>
+
+<h2 id="xlora-explained">8. X-LoRA decoded: token × layer × adapter</h2>
+
+<p>X-LoRA's whole pitch: <strong>route differently at every depth and every position</strong>.</p>
+
+<p>Let's be precise about the routing tensor's shape. With $K = 4$ adapters, $L = 32$ layers, $T$ tokens (variable):</p>
+
+$$
+g \in \mathbb{R}^{T \times L \times K}, \quad \text{with } \sum_{k=1}^{K} g_{t, \ell, k} = 1 \text{ for every } (t, \ell).
+$$
+
+<p>That is: at every (token position, layer) pair, X-LoRA produces its own probability distribution over the 4 cluster experts. For one input of length $T = 50$, that's $50 \times 32 = 1600$ separate softmax distributions, all coming out of one classifier.</p>
+
+<h3>How the LoRA update is applied at one layer</h3>
+
+<p>At layer $\ell$, for the attention $W_Q^\ell$ matrix, the effective weight applied to token $t$ is:</p>
+
+$$
+W_{Q,\text{eff}}^{\ell, t} = W_Q^\ell + \sum_{k=1}^{4} g_{t, \ell, k} \, B_Q^{(k, \ell)} A_Q^{(k, \ell)}.
+$$
+
+<p>So token 3's projection might be 80% cluster-2's adapter at layer 5, while token 4's projection at the same layer 5 might be 60% cluster-3's adapter. <strong>And the same token 3 at layer 6 might be 70% cluster-1's adapter.</strong></p>
+
+<p>This is much finer than the turn-level gate, which is just:</p>
+
+$$
+W_{Q,\text{eff}}^{\ell} = W_Q^\ell + \sum_{k=1}^{4} \alpha_{k} \, B_Q^{(k, \ell)} A_Q^{(k, \ell)}, \quad \alpha \text{ does not depend on } t \text{ or } \ell.
+$$
+
+<h3>The X-LoRA classifier — one head, three output dimensions</h3>
+
+<p>How does one small classifier produce a $(T, L, K)$ tensor? The X-LoRA architecture (per PEFT's implementation, configured in <code>inference.py:104-115</code>):</p>
+
+<ol>
+  <li>First forward pass through Mistral with adapters disabled.</li>
+  <li>Collect hidden states from <em>every</em> layer: $h^1, h^2, \ldots, h^{32}$, each of shape $T \times d$.</li>
+  <li>The classifier (a small MLP with <code>xlora_depth=4</code>, <code>xlora_size=2048</code>) takes these stacked features and produces logits of shape $T \times L \times K$.</li>
+  <li>Apply softmax across the $K$ dimension to get $g$.</li>
+  <li>Second forward pass: at layer $\ell$, position $t$, use $g_{t,\ell,:}$ to weight the LoRA update.</li>
+</ol>
+
+<p>Variable length is no problem here either — the classifier processes per-token, just like the transformer itself. Output and input share the same $T$.</p>
+
+<h3>What "<code>layerwise_scalings=True</code>" does</h3>
+
+<p>That config flag (<code>inference.py:111</code>) is what enables the per-layer dimension. With it off, the classifier produces just $(T, K)$ — same routing at every layer. With it on, you get the full $(T, L, K)$.</p>
+
+<hr>
+
+<h2 id="why-it-helps">9. Why per-layer routing could matter</h2>
+
+<p>Recall the empirical pattern: lower layers do syntax-ish things, higher layers do semantics. A plausible story for emotional dialogue:</p>
+
+<ul>
+  <li>At <strong>low layers</strong>, all four cluster experts likely have similar adaptations (they all saw English conversational text). Routing here matters less.</li>
+  <li>At <strong>middle layers</strong>, where conversational pragmatics get encoded, the cluster experts diverge — "negative_high_arousal" learned to attend to complaint phrasing differently than "positive_low_arousal" learned to attend to gratitude.</li>
+  <li>At <strong>top layers</strong>, where output token prediction is being shaped, the experts disagree most about <em>which words to produce</em>.</li>
+</ul>
+
+<p>The flexibility to weight experts differently at different depths means X-LoRA <em>could</em> express things like: "use the angry expert mostly at layers 18–22 where lexical choice happens, but use a uniform mix at layers 1–5 where it doesn't matter." A turn-level gate can't do that — it commits to one weighting for the whole stack.</p>
+
+<div class="callout warn">
+  <strong>However, in your run X-LoRA is collapsed to uniform at every $(t, \ell)$.</strong> The expressive power is wasted; the classifier never learned to make distinctions. See the previous explainer's §9.2 — likely cause is the classifier state never loaded properly, or the optimizer got stuck at the uniform fixed point.
+</div>
+
+<hr>
+
+<h2 id="recap">Tying it back to your question</h2>
+
+<p>"Why don't we use the variable-length representation directly for the gate?" Three short answers:</p>
+
+<ol>
+  <li><strong>You can't multiply a $T \times d$ matrix by a fixed-shape weight matrix and get a single 4-vector.</strong> Something has to collapse the $T$ dimension. The transformer doesn't need to because attention is shape-polymorphic; an MLP head does need to.</li>
+  <li><strong>Mean pooling is one choice; better choices exist.</strong> Last-token pooling, attention pooling, or even feeding all $T$ tokens through the gate independently and averaging the per-token alphas afterward are all sensible alternatives — and any of them might revive your collapsed gate.</li>
+  <li><strong>X-LoRA does exactly the "use variable-length" idea, but for routing.</strong> It produces one routing distribution per token (and per layer), not just one per conversation. The cost is that the classifier is bigger and harder to train — and in your case it underfit to the uniform distribution.</li>
+</ol>
+
+<p>The mean-pool vs per-token tradeoff is the same tradeoff as turn-level gate vs X-LoRA: <strong>simpler aggregation = easier to train, less expressive; finer aggregation = more expressive, harder to train without collapse</strong>.</p>
+
+<p style="color: var(--muted); font-size: 0.9em; text-align: center; margin-top: 2.5rem">
+End of follow-up. The "transformer" is a stack of 32 attention+FFN blocks; "layer" is depth in that stack; LoRA is sprinkled at every layer; X-LoRA can route differently at every depth and every token.
+</p>
+
+</main>
+</body>
+</html>

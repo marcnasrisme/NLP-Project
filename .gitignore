@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data files (these can get large)
+*.jsonl
+*.json
+*.csv
+*.parquet
+
+# Model outputs (these will be huge)
+*.pt
+*.bin
+*.safetensors
+adapter_*/
+checkpoints/
+logs/
+
+# System files
+.DS_Store
+data/.DS_Store
+
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Large files that should stay in Drive
+*.tar.gz
+*.zip
+models/
+
+# Keep project data and outputs trackable
+!data/
+!data/**
+!outputs/
+!outputs/**

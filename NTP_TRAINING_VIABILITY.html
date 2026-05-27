@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DESA — Is X-LoRA-style NTP Training Viable?</title>
+<script>
+  MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true
+    },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b5cad;
+    --accent-soft: #e7f0fa;
+    --code-bg: #f4f4f6;
+    --border: #e1e4e8;
+    --warn-bg: #fff8e1;
+    --warn-border: #f0c419;
+    --good-bg: #e8f5e9;
+    --good-border: #4caf50;
+    --bad-bg: #ffebee;
+    --bad-border: #ef5350;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e6e6;
+      --muted: #a0a0a0;
+      --accent: #79b8ff;
+      --accent-soft: #1e2a3a;
+      --code-bg: #1a1d23;
+      --border: #30363d;
+      --warn-bg: #2a2410;
+      --warn-border: #d4a017;
+      --good-bg: #143018;
+      --good-border: #2e7d32;
+      --bad-bg: #3a1818;
+      --bad-border: #ef5350;
+    }
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    margin: 0;
+  }
+  main {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; margin-top: 3rem; }
+  h3 { font-size: 1.2rem; }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    font-size: 0.9em;
+  }
+  pre code { background: transparent; padding: 0; }
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-left-color: var(--warn-border); background: var(--warn-bg); }
+  .callout.good { border-left-color: var(--good-border); background: var(--good-bg); }
+  .callout.bad  { border-left-color: var(--bad-border);  background: var(--bad-bg);  }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child  { margin-bottom: 0; }
+  ul, ol { padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  table {
+    border-collapse: collapse;
+    margin: 1rem 0;
+    width: 100%;
+    font-size: 0.93em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); }
+  mjx-container[display="true"] { margin: 1rem 0 !important; }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .diagram {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1.2rem 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    white-space: pre;
+    overflow-x: auto;
+    line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Is X-LoRA-style NTP Training Viable for DESA?</h1>
+
+<p style="color: var(--muted)">A walk-through of forward, loss, backward, memory, time, and the Q4 incompatibility — using your "Oh no, I lost my job" example.</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#one-line">1. The recipe in one sentence</a></li>
+    <li><a href="#forward">2. Forward pass on "Oh no, I lost my job"</a></li>
+    <li><a href="#loss">3. The next-token-prediction loss, written out</a></li>
+    <li><a href="#backward">4. The backward pass — what gradient flows where</a></li>
+    <li><a href="#memory">5. Memory cost</a></li>
+    <li><a href="#time">6. Compute cost</a></li>
+    <li><a href="#q4">7. Why 4-bit quantization breaks this — the real reasons</a></li>
+    <li><a href="#mitigations">8. Mitigations that bring the cost back down</a></li>
+    <li><a href="#verdict">9. Verdict</a></li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="one-line">1. The recipe in one sentence</h2>
+
+<div class="callout">
+  Yes — your description is exactly right. We compute next-token logits using the effective weight $W + \sum_k \alpha_k \, B^{(k)} A^{(k)}$ at every projection in every layer, score those logits against the gold continuation, and back-propagate the loss <strong>only</strong> through the routing classifier (which produces the $\alpha$ values). The base $W$ and the experts $A^{(k)}, B^{(k)}$ all stay frozen — only the small classifier learns.
+</div>
+
+<hr>
+
+<h2 id="forward">2. Forward pass on "Oh no, I lost my job"</h2>
+
+<p>Let's pick a concrete training pair from EmpatheticDialogues:</p>
+
+<div class="diagram">prompt:    "Oh no, I lost my job"        ← 7 tokens
+target:    "I'm so sorry to hear that"   ← 7 tokens (the gold assistant response)
+full seq:  prompt + target               ← 14 tokens, T = 14</div>
+
+<h3>Step 2.1 — Embedding</h3>
+
+<p>Tokenize and look up:</p>
+
+$$
+h^{0} = E[\text{token\_ids}] \in \mathbb{R}^{T \times d}, \qquad T = 14, \, d = 4096.
+$$
+
+<h3>Step 2.2 — One forward pass through 32 X-LoRA-active layers</h3>
+
+<p>For each layer $\ell = 1, \dots, 32$:</p>
+
+<ol>
+  <li>The classifier reads the current hidden state $h^{\ell-1}$ and produces routing weights $\alpha_{t, \ell} \in \Delta^3$ for every token at this layer (this is the per-(token, layer) granularity X-LoRA gives by default — for our purposes, conceptually identical to "produce $\alpha_t$ once").</li>
+  <li>For each LoRA target projection $W_Q^\ell, W_K^\ell, W_V^\ell, W_O^\ell$, the effective weight applied at token $t$ is:</li>
+</ol>
+
+$$
+W_{Q,\text{eff}}^{\ell, t} = W_Q^\ell + \sum_{k=0}^{3} \alpha_{t, \ell, k} \, B_Q^{(k, \ell)} \, A_Q^{(k, \ell)}.
+$$
+
+<ol start="3">
+  <li>Standard self-attention + FFN with these effective weights produces $h^{\ell}$.</li>
+</ol>
+
+<p>Notice: $\alpha$ enters multiplicatively into the layer's matmul. Because $\alpha$ comes from the trainable classifier, and $\alpha$ touches every layer's output, the loss gradient will flow back through every $\alpha$ to the classifier.</p>
+
+<h3>Step 2.3 — Final logits</h3>
+
+<p>After layer 32:</p>
+
+$$
+\text{logits}_t = h^{32}_t \cdot E^\top \in \mathbb{R}^{V}, \qquad V \approx 32{,}000.
+$$
+
+<p>So we have a logit vector for each of the $T = 14$ positions, predicting the <em>next</em> token at each.</p>
+
+<hr>
+
+<h2 id="loss">3. The next-token-prediction loss, written out</h2>
+
+<p>For each position $t$ in the gold response, we want the model to predict the actual next token. The loss is mean cross-entropy <em>only over response tokens</em> (we mask out prompt-position losses):</p>
+
+$$
+\mathcal{L}_{\text{NTP}} = -\frac{1}{|\mathcal{R}|} \sum_{t \in \mathcal{R}} \log P_t[y_{t+1}],
+$$
+
+<p>where:</p>
+
+<ul>
+  <li>$\mathcal{R} = \{7, 8, 9, 10, 11, 12\}$ — the positions whose <em>next</em> token is a gold-response token (one less than the response length).</li>
+  <li>$P_t = \mathrm{softmax}(\text{logits}_t)$ is the predicted next-token distribution at position $t$.</li>
+  <li>$y_{t+1}$ is the actual next-token id from the gold sequence.</li>
+</ul>
+
+<p>Concretely for our example:</p>
+
+<div class="diagram">position t   token at t      target y_{t+1}     CE term
+   0         "Oh"            "no"               -log P_0["no"]      ← masked (prompt)
+   1         "no"            ","                -log P_1[","]       ← masked
+   2         ","             "I"                -log P_2["I"]       ← masked
+   3         "I"             "lost"             -log P_3["lost"]    ← masked
+   4         "lost"          "my"               -log P_4["my"]      ← masked
+   5         "my"            "job"              -log P_5["job"]     ← masked
+   6         "job"           "I'm"              -log P_6["I'm"]     ← FIRST scored
+   7         "I'm"           "so"               -log P_7["so"]
+   8         "so"            "sorry"            -log P_8["sorry"]
+   9         "sorry"         "to"               -log P_9["to"]
+  10         "to"            "hear"             -log P_10["hear"]
+  11         "hear"          "that"             -log P_11["that"]
+  12         "that"          "&lt;EOS&gt;"            -log P_12["&lt;EOS&gt;"]
+   ─────────────────────────────────────
+   Loss = mean of the 7 unmasked CE terms (positions 6..12)</div>
+
+<p>The mask is the same trick used in <code>evaluate._encode_prompt_response</code> — set <code>labels[:7] = -100</code> so PyTorch's CE skips those positions.</p>
+
+<hr>
+
+<h2 id="backward">4. The backward pass — what gradient flows where</h2>
+
+<p>Now the interesting part. PyTorch's autograd builds a computational graph during the forward pass; <code>loss.backward()</code> walks it in reverse and computes gradients with respect to every leaf tensor that has <code>requires_grad=True</code>.</p>
+
+<h3>What's a leaf with requires_grad?</h3>
+
+<p>Only the classifier's MLP weights $\theta_g$. Everything else — base $W$, four LoRA experts $\{A^{(k)}, B^{(k)}\}_{k=0}^3$ — has <code>requires_grad=False</code>.</p>
+
+<h3>The chain rule, conceptually</h3>
+
+<p>The classifier produces $\alpha = g(\cdot ; \theta_g)$. This $\alpha$ enters the effective weight at every layer:</p>
+
+$$
+\Delta W^{(\ell)} = \sum_k \alpha_k \, B^{(k, \ell)} A^{(k, \ell)} \quad\Longrightarrow\quad \frac{\partial \Delta W^{(\ell)}}{\partial \alpha_k} = B^{(k, \ell)} A^{(k, \ell)}.
+$$
+
+<p>Then the chain of dependencies for the gradient with respect to $\theta_g$:</p>
+
+$$
+\frac{\partial \mathcal{L}_{\text{NTP}}}{\partial \theta_g}
+= \sum_{\ell, t, k}
+\underbrace{\frac{\partial \mathcal{L}_{\text{NTP}}}{\partial \alpha_{t,\ell,k}}}_{\text{loss back through } \ell..32}
+\cdot
+\underbrace{\frac{\partial \alpha_{t,\ell,k}}{\partial \theta_g}}_{\text{classifier head}}.
+$$
+
+<p>The first factor — the gradient of the loss with respect to a single routing scalar at one (token, layer) — requires backward propagation through every transformer layer above it. This is what makes the backward expensive.</p>
+
+<h3>What's NOT updated</h3>
+
+<p>The autograd machinery still walks through the base model and the LoRA experts during backward, but their weight gradients aren't computed (because <code>requires_grad=False</code>). The activation gradient (gradient of loss w.r.t. each layer's hidden state) <em>is</em> computed and propagated. That's what carries the signal back to the classifier.</p>
+
+<div class="callout">
+  <strong>Key insight:</strong> "frozen" doesn't mean "shortcut around in backward." Activations through frozen layers are still part of the graph. The 7B base + 4 experts contribute essentially the same memory-and-compute cost during backward as they would in full fine-tuning — only the optimizer step is cheaper.
+</div>
+
+<hr>
+
+<h2 id="memory">5. Memory cost</h2>
+
+<p>This is where it hurts. Let's count carefully.</p>
+
+<h3>Parameter memory (constant, on GPU at all times)</h3>
+
+<table>
+<thead><tr><th>What</th><th>Size</th></tr></thead>
+<tbody>
+<tr><td>Mistral-7B base in FP16</td><td>$\approx 14$ GB</td></tr>
+<tr><td>4 LoRA experts × 16M params × 4 bytes (FP32)</td><td>$\approx 0.26$ GB</td></tr>
+<tr><td>Classifier (4-layer MLP, 2048 hidden, ~16M params, FP32)</td><td>$\approx 0.06$ GB</td></tr>
+<tr><td>Optimizer state (Adam: 2× classifier params)</td><td>$\approx 0.13$ GB</td></tr>
+<tr><td><strong>Subtotal — parameter memory</strong></td><td><strong>~14.5 GB</strong></td></tr>
+</tbody>
+</table>
+
+<h3>Activation memory (the variable, scales with batch × seq length)</h3>
+
+<p>For backward to work, every layer's intermediate activations must stay resident until that layer's backward step finishes. Mistral has 32 layers; each layer roughly stores:</p>
+
+<ul>
+  <li>Residual stream input/output: $T \times d = T \times 4096$ FP16 floats.</li>
+  <li>Attention Q, K, V projections: $3 \times T \times d$.</li>
+  <li>Attention probabilities (softmax output): $T \times T$ per head × 32 heads.</li>
+  <li>FFN intermediate (Mistral uses SwiGLU with intermediate $\approx 14336$): $T \times 14336$.</li>
+</ul>
+
+<p>Adding it up, roughly $\approx 50 \times T \times d \times 2$ bytes per layer. For $T = 256$:</p>
+
+$$
+50 \times 256 \times 4096 \times 2 = 105 \text{ MB per layer}, \quad \times 32 \text{ layers} \approx 3.3 \text{ GB per batch element.}
+$$
+
+<p>For $T = 512$: $\approx 6.6$ GB per batch element. So with batch size 1, total VRAM is roughly:</p>
+
+<table>
+<thead><tr><th>Sequence length</th><th>VRAM total (params + activations)</th><th>Fits on…</th></tr></thead>
+<tbody>
+<tr><td>$T = 128$</td><td>$\approx 16$ GB</td><td>A100 (40 GB) or T4 (16 GB) — tight</td></tr>
+<tr><td>$T = 256$</td><td>$\approx 18$ GB</td><td>A100, V100 (32 GB)</td></tr>
+<tr><td>$T = 512$ (your current)</td><td>$\approx 21$ GB</td><td>A100 only</td></tr>
+</tbody>
+</table>
+
+<p>This is the dominant cost. The frozen experts and frozen base contribute zero parameter gradients, but they contribute the full activation footprint.</p>
+
+<hr>
+
+<h2 id="time">6. Compute cost</h2>
+
+<h3>Per-step time (A100 80 GB, FP16, batch 1)</h3>
+
+<table>
+<thead><tr><th>Phase</th><th>Time</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Forward through Mistral with X-LoRA active</td><td>$\approx 0.4$–$0.6$ s</td><td>32 layers × 4 LoRA-augmented projections × $T$ tokens; PEFT's X-LoRA adds the classifier MLP per layer.</td></tr>
+<tr><td>Loss computation (CE over response)</td><td>$&lt; 1$ ms</td><td>Trivial.</td></tr>
+<tr><td>Backward pass</td><td>$\approx 0.8$–$1.5$ s</td><td>32 layers of attention + FFN backward; roughly 2× forward.</td></tr>
+<tr><td>Optimizer step (Adam on classifier)</td><td>$&lt; 5$ ms</td><td>Only ~16M params updated.</td></tr>
+<tr><td><strong>Per step total</strong></td><td><strong>$\approx 1.5$–$2$ s</strong></td><td></td></tr>
+</tbody>
+</table>
+
+<h3>Total training time</h3>
+
+<p>If you keep your current 2048 examples × 4 epochs = 8192 steps at batch size 1:</p>
+
+$$
+8192 \text{ steps} \times 2 \text{ s/step} \approx 4.5 \text{ hours.}
+$$
+
+<p>That's a Colab-A100 session and a half. With a smaller schedule:</p>
+
+<table>
+<thead><tr><th>Schedule</th><th>Total time on A100</th></tr></thead>
+<tbody>
+<tr><td>1024 examples × 2 epochs ($T=512$)</td><td>$\approx 70$ min</td></tr>
+<tr><td>1024 examples × 2 epochs ($T=256$)</td><td>$\approx 35$ min</td></tr>
+<tr><td>2048 examples × 4 epochs ($T=256$)</td><td>$\approx 2.3$ h</td></tr>
+</tbody>
+</table>
+
+<p>Reasonable for a class project if you commit to the A100 runtime.</p>
+
+<hr>
+
+<h2 id="q4">7. Why 4-bit quantization breaks this — the real reasons</h2>
+
+<p>You asked specifically why Q4 doesn't work. The answer is layered.</p>
+
+<h3>Reason 1 (the proximate one): PEFT's hard check</h3>
+
+<p>Look at <code>inference.py:97-101</code>:</p>
+
+<pre><code>if model_has_bnb_linear(base_model):
+    raise ValueError(
+        "PEFT X-LoRA is not compatible with this bitsandbytes Linear base path. "
+        "Load the X-LoRA base with load_base_model(..., quantized=False, torch_dtype=torch.float16)."
+    )</code></pre>
+
+<p>PEFT explicitly refuses to wrap a model whose linear layers are bitsandbytes <code>Linear4bit</code>. This is a software-level check, not a fundamental autograd limitation. PEFT's X-LoRA hooks were never validated against the bnb path.</p>
+
+<h3>Reason 2 (the deeper one): the bnb Linear4bit forward path is custom CUDA</h3>
+
+<p>A normal <code>nn.Linear</code> does:</p>
+
+<pre><code>output = input @ weight.T + bias    # standard PyTorch matmul, autograd-tracked</code></pre>
+
+<p>A bnb <code>Linear4bit</code> does, roughly:</p>
+
+<pre><code>weight_dequantized = bnb.cuda_kernels.dequantize_nf4(weight_4bit, quant_state)
+output = input @ weight_dequantized.T + bias    # the dequantize call is *inside* the kernel</code></pre>
+
+<p>The dequantization step uses a fixed NF4 codebook lookup. It's <em>technically</em> differentiable (bitsandbytes does implement a backward that recovers $\partial \text{loss} / \partial \text{input}$), but:</p>
+
+<ol>
+  <li><strong>The weight gradient $\partial \text{loss} / \partial W_{4bit}$ is not computed</strong> (and we wouldn't want it to be — we're not training the base). This part is fine.</li>
+  <li><strong>The activation gradient $\partial \text{loss} / \partial \text{input}$ is computed</strong> by re-dequantizing the weight inside the backward kernel. This <em>is</em> what carries the signal back to the classifier, and it does work — but it's numerically imprecise. The quantization error injects noise that compounds over 32 layers of backward.</li>
+  <li>PEFT's X-LoRA was designed to wrap regular <code>nn.Linear</code>; the LoRA-augmentation logic and classifier hooks assume a clean linear forward. Wrapping a bnb Linear4bit means you'd need a custom adapter path that intercepts before dequantization and applies the LoRA delta to the dequantized weight on the fly. This isn't implemented in the version you have.</li>
+</ol>
+
+<h3>Reason 3 (the practical one): you don't save much memory anyway</h3>
+
+<p>Q4 saves ~10 GB of <strong>parameter memory</strong> (14 GB FP16 → 4 GB Q4). But the activation memory — which is the dominant cost during backward, ~7 GB at $T=512$ — is unchanged. The ratio of savings to total memory is modest, and you pay for it with classifier-gradient noise and a coding burden.</p>
+
+<div class="callout warn">
+  <strong>The summary:</strong> Q4 isn't fundamentally incompatible with NTP-style training; PEFT just doesn't support it, and the gradient quality through dequantization-on-the-fly is poor. The cheap path is to use FP16 throughout. The base model fits in FP16 on an A100; you don't need quantization for VRAM reasons.
+</div>
+
+<hr>
+
+<h2 id="mitigations">8. Mitigations that bring the cost back down</h2>
+
+<p>If $T=512$ × batch 1 × A100 is too expensive, several things help:</p>
+
+<table>
+<thead><tr><th>Technique</th><th>Effect</th><th>Tradeoff</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Gradient checkpointing</strong></td>
+  <td>Activations stored only at "checkpoint" layers; recomputed during backward. Cuts activation memory ~4×.</td>
+  <td>~30% slower per step. One-line addition: <code>model.gradient_checkpointing_enable()</code>.</td>
+</tr>
+<tr>
+  <td><strong>Shorter $T$</strong></td>
+  <td>Halve $T$ → halve activation memory.</td>
+  <td>Truncates long conversations; mostly fine for ED.</td>
+</tr>
+<tr>
+  <td><strong>Train on a subset</strong></td>
+  <td>1024 examples × 2 epochs instead of 2048 × 4.</td>
+  <td>Less robust convergence.</td>
+</tr>
+<tr>
+  <td><strong>Train only the last K layers' routing</strong></td>
+  <td>Freeze classifier outputs at layers 1–28; only the layer-29..32 routing learns.</td>
+  <td>Loses some expressivity; backward only needs to traverse 4 layers.</td>
+</tr>
+<tr>
+  <td><strong>Skip the per-layer dimension</strong></td>
+  <td>Set <code>layerwise_scalings=False</code> in <code>XLoraConfig</code>. Routing becomes per-token only.</td>
+  <td>Smaller routing tensor, less memory; aligns with the per-token goal anyway.</td>
+</tr>
+</tbody>
+</table>
+
+<p>The combination "checkpointing + $T=256$ + <code>layerwise_scalings=False</code>" gets you down to maybe 12–14 GB total VRAM and ~1.0 s/step. Comfortable on A100, plausible on a 24 GB consumer GPU.</p>
+
+<hr>
+
+<h2 id="verdict">9. Verdict</h2>
+
+<table>
+<thead><tr><th>Question</th><th>Answer</th></tr></thead>
+<tbody>
+<tr>
+  <td>Is your description of the training step correct?</td>
+  <td><span style="color: var(--good-border); font-weight:600">Yes</span> — forward with effective weight $W + \sum_k \alpha_k B^{(k)} A^{(k)}$, score next-token logits, backprop only through the classifier producing $\alpha$.</td>
+</tr>
+<tr>
+  <td>Is it viable for DESA?</td>
+  <td><span style="color: var(--good-border); font-weight:600">Yes on A100</span>, no on T4 (T4's 16 GB doesn't fit FP16 Mistral + activations together).</td>
+</tr>
+<tr>
+  <td>How long?</td>
+  <td>~1–2 hours for a sensible schedule on A100.</td>
+</tr>
+<tr>
+  <td>Why not Q4?</td>
+  <td>PEFT explicitly refuses; bnb backward gradient is noisy; little memory saved during backward anyway. Use FP16.</td>
+</tr>
+</tbody>
+</table>
+
+<div class="callout good">
+  <strong>Practical recommendation if you decide to do it:</strong>
+  <ul>
+    <li>Use the FP16 base model (no quantization), exactly as cell 5 of notebook 05 already does.</li>
+    <li>Set <code>layerwise_scalings=False</code> in the X-LoRA config to align with your per-token goal.</li>
+    <li>Enable gradient checkpointing on the base model.</li>
+    <li>Trim $T$ to 256, use a 1024-example × 2-epoch schedule.</li>
+    <li>Loss: standard NTP CE on the gold response only (mask prompt tokens, exactly like <code>evaluate._encode_prompt_response</code> already does).</li>
+    <li>Optimizer: AdamW on classifier params only; everything else stays frozen.</li>
+    <li>Expect ~1 hour on A100 and a measurable drop in PPL on the gold continuation versus your pooled-CE classifier — that's the headline result.</li>
+  </ul>
+</div>
+
+<p>This is a clean experiment to add as a third gating system in your eval table: <code>token_level_xlora_ntp</code> alongside <code>turn_level_v2</code> and the per-token Option A you sketched. It directly reproduces the X-LoRA paper's recipe at the scale you have, and the result either confirms or contradicts the paper's claim that NTP supervision is the right way to train these classifiers.</p>
+
+<p>Want me to implement it as <code>notebooks/07_xlora_ntp_training.ipynb</code> + supporting <code>gating_v3_ntp.py</code>? Self-contained, ~200 lines, one-cell trainer plus the eval slot-in.</p>
+
+<hr>
+
+<p style="color: var(--muted); font-size: 0.9em; text-align: center; margin-top: 2.5rem">
+The big picture: NTP training is the doctrinally correct way to train an X-LoRA classifier; it's expensive because frozen layers still contribute full activation memory and full backward compute; FP16 base + gradient checkpointing + shorter $T$ keeps it tractable on a single A100. The Q4 path is closed by PEFT's compatibility check and isn't worth fighting.
+</p>
+
+</main>
+</body>
+</html>

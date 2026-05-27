@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DESA — Why Pooled CE Is Wrong for X-LoRA</title>
+<script>
+  MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true
+    },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b5cad;
+    --accent-soft: #e7f0fa;
+    --code-bg: #f4f4f6;
+    --border: #e1e4e8;
+    --warn-bg: #fff8e1;
+    --warn-border: #f0c419;
+    --good-bg: #e8f5e9;
+    --good-border: #4caf50;
+    --bad-bg: #ffebee;
+    --bad-border: #ef5350;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e6e6;
+      --muted: #a0a0a0;
+      --accent: #79b8ff;
+      --accent-soft: #1e2a3a;
+      --code-bg: #1a1d23;
+      --border: #30363d;
+      --warn-bg: #2a2410;
+      --warn-border: #d4a017;
+      --good-bg: #143018;
+      --good-border: #2e7d32;
+      --bad-bg: #3a1818;
+      --bad-border: #ef5350;
+    }
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    margin: 0;
+  }
+  main {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  h1, h2, h3, h4 {
+    color: var(--fg);
+    line-height: 1.25;
+    margin-top: 2.2rem;
+  }
+  h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  h2 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; margin-top: 3rem; }
+  h3 { font-size: 1.2rem; }
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    font-size: 0.9em;
+  }
+  pre code { background: transparent; padding: 0; }
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.8rem 1rem;
+    margin: 1.2rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-left-color: var(--warn-border); background: var(--warn-bg); }
+  .callout.good { border-left-color: var(--good-border); background: var(--good-bg); }
+  .callout.bad  { border-left-color: var(--bad-border);  background: var(--bad-bg);  }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child  { margin-bottom: 0; }
+  ul, ol { padding-left: 1.6rem; }
+  li { margin: 0.3rem 0; }
+  table {
+    border-collapse: collapse;
+    margin: 1rem 0;
+    width: 100%;
+    font-size: 0.93em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); }
+  mjx-container[display="true"] { margin: 1rem 0 !important; }
+  .toc {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>X-LoRA's Training-Objective Mismatch</h1>
+
+<p style="color: var(--muted)">Why pooling across all tokens during training contradicts what per-token routing is for, what we did instead, and the four ways out.</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#question">1. The question</a></li>
+    <li><a href="#mismatch">2. The mismatch in one sentence</a></li>
+    <li><a href="#math">3. The math: why pooled CE produces diffuse routing</a></li>
+    <li><a href="#why-anyway">4. Why we did it anyway</a></li>
+    <li><a href="#alternatives">5. The four alternatives</a></li>
+    <li><a href="#paper">6. What the X-LoRA paper actually does</a></li>
+    <li><a href="#consequences">7. What this means for our eval results</a></li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="question">1. The question</h2>
+
+<p>You asked: <em>"Why should we aggregate over all tokens for X-LoRA — isn't the whole point for each and every token to trigger a specific LoRA or blend of LoRAs?"</em></p>
+
+<p>The answer is yes, that <em>is</em> the point. And our training objective doesn't honor it. Your intuition spotted a real, structural problem.</p>
+
+<hr>
+
+<h2 id="mismatch">2. The mismatch in one sentence</h2>
+
+<div class="callout bad">
+  X-LoRA is designed to make $T \times L \times K$ routing decisions per example. We are supervising it with <strong>one label per example</strong>. The gradient signal is too coarse for the architecture's expressivity.
+</div>
+
+<p>Concretely, with $T \approx 80$ tokens and $L = 32$ layers and $K = 4$ adapters, each forward pass produces $80 \times 32 \times 4 \approx 10{,}000$ routing scalings. Our training collapses all of that down to a single 4-class supervised target.</p>
+
+<hr>
+
+<h2 id="math">3. The math: why pooled CE produces diffuse routing</h2>
+
+<p>The objective we're using is the pooled-logit cross-entropy:</p>
+
+$$
+\bar z = \frac{1}{T_{\text{real}} \cdot L} \sum_{t, \ell} z_{t, \ell}, \qquad \mathcal{L}_{\text{CE}} = -\log \sigma(\bar z)_y,
+$$
+
+<p>where $z_{t, \ell} \in \mathbb{R}^K$ is the classifier's per-(token, layer) logit vector, $\sigma$ is softmax over the $K$ adapter dimension, and $y$ is the gold cluster index.</p>
+
+<p>Now apply the chain rule to find the gradient hitting any single position's logit:</p>
+
+$$
+\frac{\partial \mathcal{L}_{\text{CE}}}{\partial z_{t, \ell}} = \underbrace{\frac{\partial \mathcal{L}_{\text{CE}}}{\partial \bar z}}_{\text{shape } K} \cdot \underbrace{\frac{\partial \bar z}{\partial z_{t, \ell}}}_{= \frac{1}{T_{\text{real}} \cdot L}}.
+$$
+
+<p>So <strong>each individual $z_{t, \ell}$ receives a gradient scaled down by $1/(T_{\text{real}} \cdot L)$</strong>. For our typical input ($T_{\text{real}} \approx 80, L = 32$), that's a factor of</p>
+
+$$
+\frac{1}{80 \cdot 32} = \frac{1}{2560} \approx 4 \times 10^{-4}.
+$$
+
+<p>The CE term essentially says: <em>"the average across 2560 routing decisions should point at the gold cluster."</em> Gradient descent finds the lazy way to satisfy that constraint: a tiny per-position bias toward gold, without any individual position being peaked.</p>
+
+<div class="callout warn">
+  <strong>This is exactly what we observed during training.</strong> The X-LoRA classifier reached <code>epoch_acc = 0.579</code> on the pooled prediction — but per-(token, layer) entropy stayed at <code>~1.38</code> (essentially $\log 4$, i.e. uniform). The classifier learned <em>the average</em>, not the <em>parts</em>.
+</div>
+
+<h3>Numerical illustration</h3>
+
+<p>Suppose every $(t, \ell)$ outputs softmax probabilities $(0.30, 0.25, 0.20, 0.25)$ — a 5-percentage-point tilt toward cluster 0. Then:</p>
+
+<ul>
+  <li>The pooled prediction is also $(0.30, 0.25, 0.20, 0.25)$, $\arg\max = 0$. <span style="color: var(--accent)">Pooled accuracy on cluster-0 examples: 100%.</span></li>
+  <li>Per-position entropy: $H = -(0.3\ln 0.3 + 0.25\ln 0.25 + 0.20\ln 0.20 + 0.25\ln 0.25) \approx 1.376$. <span style="color: var(--bad-border)">Essentially uniform.</span></li>
+</ul>
+
+<p>You can have a "correct" pooled prediction with completely diffuse per-position routing. The supervision lets it.</p>
+
+<hr>
+
+<h2 id="why-anyway">4. Why we did it anyway</h2>
+
+<p>EmpatheticDialogues gives us <strong>conversation-level labels</strong> — one emotion per dialogue. We do not have per-token labels saying <em>"this token should route to the angry expert."</em> So how do we translate one label into per-position supervision? You have to pick a compromise. The original notebook 03 picked option 1 below; we kept it.</p>
+
+<p>The four options form a spectrum:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Option</th>
+  <th>What it supervises</th>
+  <th>Per-position routing</th>
+  <th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>1. Pooled CE (current)</td>
+  <td>$\bar z = \mathrm{mean}_{t,\ell} z_{t,\ell}$</td>
+  <td>diffuse — only the average matters</td>
+  <td>cheap</td>
+</tr>
+<tr>
+  <td>2. Per-(t, ℓ) CE</td>
+  <td>$z_{t,\ell}$ for every $(t, \ell)$</td>
+  <td>peaked but homogeneous (every position aims at gold)</td>
+  <td>cheap</td>
+</tr>
+<tr>
+  <td>3. Per-layer pooled CE</td>
+  <td>$\bar z_\ell = \mathrm{mean}_t z_{t,\ell}$ for each $\ell$</td>
+  <td>peaked per layer, free per token within</td>
+  <td>cheap</td>
+</tr>
+<tr>
+  <td>4. Next-token-prediction loss</td>
+  <td>standard LM CE on the gold response</td>
+  <td>emerges from optimization</td>
+  <td>expensive (full graph through 32 layers)</td>
+</tr>
+</tbody>
+</table>
+
+<hr>
+
+<h2 id="alternatives">5. The four alternatives, in detail</h2>
+
+<h3>Option 1 — pooled CE (what we have)</h3>
+
+$$
+\mathcal{L}_{\text{pool}} = -\log \sigma\!\left(\frac{1}{T_{\text{real}} L} \sum_{t,\ell} z_{t,\ell}\right)_{\!y}
+$$
+
+<p>Coarse but stable. Each per-position gradient is scaled by $1/(T_{\text{real}} L)$, so individual $(t, \ell)$ softmaxes never sharpen. <strong>Result we observed:</strong> pooled accuracy 0.58, per-position entropy ~1.38.</p>
+
+<h3>Option 2 — per-(t, ℓ) CE against the same label</h3>
+
+$$
+\mathcal{L}_{\text{per-pos}} = \frac{1}{T_{\text{real}} L} \sum_{t, \ell} -\log \sigma(z_{t, \ell})_y
+$$
+
+<p>Now each position gets a <em>full-magnitude</em> gradient — no $1/(T_{\text{real}} L)$ dampening — because it's its own CE term. Per-position softmaxes will sharpen rapidly and entropy will plummet.</p>
+
+<p><strong>The catch:</strong> you've imposed the strong assumption that <em>every</em> $(t, \ell)$ should route to the gold cluster. That's exactly the assumption X-LoRA was built to relax. The result would be peaked routing that's homogeneous across positions and layers — equivalent to a very over-confident turn-level gate replicated 2560 times. Sharp, but not <em>discriminative</em>.</p>
+
+<h3>Option 3 — per-layer pooled CE</h3>
+
+$$
+\mathcal{L}_{\text{per-layer}} = \sum_{\ell=1}^{L} -\log \sigma\!\left(\frac{1}{T_{\text{real}}} \sum_{t} z_{t, \ell}\right)_{\!y}
+$$
+
+<p>Pool over tokens only; supervise each layer's averaged decision separately. Each layer's per-token gradient is scaled by just $1/T_{\text{real}}$ — much stronger than option 1's $1/(T_{\text{real}} L)$. And different layers can specialize: layer 5's average can disagree with layer 25's.</p>
+
+<p>This is the <strong>middle-ground compromise</strong>. Forces each layer's averaged routing to be correct, while letting per-token variation within a layer happen, and letting per-layer behavior diverge.</p>
+
+<h3>Option 4 — next-token-prediction loss with the X-LoRA stack live</h3>
+
+$$
+\mathcal{L}_{\text{NTP}} = -\sum_{i=1}^{N} \log p_\theta(y_i \mid y_{<i}, x; \, \alpha = g(z))
+$$
+
+<p>Don't supervise routing directly at all. Train the classifier by running full forward passes with X-LoRA's per-position routing live, computing standard LM cross-entropy on the gold response, and back-propagating through the X-LoRA stack to the classifier. The base model and the four LoRA experts stay frozen — only the classifier head (~16M params) updates.</p>
+
+<p>Gradients reach the classifier through the 32 frozen transformer layers. PyTorch keeps the computational graph alive even when leaf parameters have <code>requires_grad=False</code>, so this works mechanically. The classifier learns which experts are useful at which positions <em>because the routing affects the LM loss</em>, and routing decisions emerge from optimization rather than being hand-supervised.</p>
+
+<div class="callout">
+  <strong>The intellectual difference:</strong> options 1–3 treat routing as the <em>target</em> ("predict the right cluster"). Option 4 treats routing as a <em>means</em> ("produce the right response"). Only option 4 lets the per-position pattern be data-driven.
+</div>
+
+<p>Cost: VRAM for the activation graph through 32 transformer layers in FP16 — non-trivial but feasible on an A100. ~3–5× our current step time because of the deeper backward pass.</p>
+
+<hr>
+
+<h2 id="paper">6. What the X-LoRA paper actually does</h2>
+
+<p>Buehler &amp; Buehler (<a href="https://arxiv.org/abs/2402.07148">arXiv 2402.07148</a>) train X-LoRA with the next-token-prediction loss — option 4 — for exactly the reason your question raises. Their pitch is: routing is a means, not the target. The thing you actually care about is downstream task performance, so supervise that, and let the routing pattern fall out of optimization.</p>
+
+<p>Their experimental sections never explicitly supervise the gating classifier with cluster labels. The classifier is trained jointly with whatever downstream loss the application requires.</p>
+
+<p>The pooled-CE objective in DESA's notebook 03 (and in our v2) is a <strong>weak proxy</strong> for that, justified only by the project's tight Colab budget and the convenience of having ED's emotion labels. It is <em>not</em> what the X-LoRA paper does.</p>
+
+<hr>
+
+<h2 id="consequences">7. What this means for our eval results</h2>
+
+<p>The X-LoRA v2 classifier learned <strong>the cluster signal</strong> (pooled accuracy 0.58) but not <strong>the per-position routing pattern</strong> the architecture is supposed to deliver. At inference, routing weights at each $(t, \ell)$ are slightly tilted toward the gold cluster on average, but each individual decision is close to uniform.</p>
+
+<p>This is "X-LoRA acting like a soft turn-level gate," which is a <em>strict downgrade</em>: it has the cost of token-level routing — extra forward pass for the classifier, FP16 base instead of 4-bit, no native bitsandbytes path — without the benefit of actually routing differently per position.</p>
+
+<p>So in your final eval table, expect:</p>
+
+<ul>
+  <li><code>token_level_xlora_v2.gold_cluster_mass</code>: ~0.27–0.32 (better than v1's 0.25 uniform, but much worse than the turn-gate which routes more sharply at the conversation level).</li>
+  <li><code>mean_entropy</code>: ~1.32–1.38 (close to uniform).</li>
+  <li>PPL: marginally better than <code>uniform_blend</code>, probably worse than <code>turn_level_v2</code>.</li>
+</ul>
+
+<div class="callout good">
+  <strong>The paper-worthy story:</strong> "X-LoRA's training objective mismatch — supervising one cluster label while the architecture produces $T \times L$ routing decisions — means the classifier learns the cluster signal at the pooled level but not the per-position sharpness. The simpler turn-level gate, with an aligned objective (one prediction per conversation), actually outperforms X-LoRA in this setup. Recovering X-LoRA's full expressive benefit would require either (a) per-layer or per-position CE, or (b) the original paper's NTP-based training, both of which we leave to future work."</strong>
+</div>
+
+<hr>
+
+<p style="color: var(--muted); font-size: 0.9em; text-align: center; margin-top: 2.5rem">
+The shortest summary: pooled CE makes per-position routing optional, and gradient descent takes the option to ignore it. To get the per-token magic X-LoRA promises, the supervision granularity has to match the decision granularity — either by supervising at the same granularity (option 2 or 3) or by replacing routing supervision with NTP loss (option 4).
+</p>
+
+</main>
+</body>
+</html>

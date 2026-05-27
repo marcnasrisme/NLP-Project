@@ -1,0 +1,53 @@
+# QLoRA adapter training configuration
+# Designed to run safely on Colab Pro T4 or A100
+
+model:
+  base_model: "mistralai/Mistral-7B-Instruct-v0.2"
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_quant_type: "nf4"
+  use_nested_quant: false
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+  task_type: "CAUSAL_LM"
+
+training:
+  num_train_epochs: 3
+  per_device_train_batch_size: 2       # safe for T4; bump to 4 on A100
+  gradient_accumulation_steps: 8       # effective batch size = 16
+  learning_rate: 2e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  max_seq_length: 512
+  max_train_examples: 4000             # cap post-flattened examples for predictable Colab runtime
+  max_eval_examples: 200
+  # Trainer AMP is intentionally disabled in src/train_adapter.py.
+  # BitsAndBytes still uses model.bnb_4bit_compute_dtype for QLoRA matmuls.
+  logging_steps: 10
+  save_steps: 50                       # checkpoint frequently; Colab sessions die
+  save_total_limit: 2
+  eval_strategy: "steps"
+  eval_steps: 100
+
+paths:
+  # Resolved at runtime through src/paths.py. These keys remain for notebook display only.
+  repo_root_env: "DESA_REPO_ROOT"
+  data_dir: "data"
+  output_dir: "outputs"
+
+clusters:
+  k: 4
+  names:
+    - "positive_high_arousal"   # excited, joyful, surprised
+    - "positive_low_arousal"    # content, calm, grateful
+    - "negative_high_arousal"   # angry, terrified, anxious
+    - "negative_low_arousal"    # sad, lonely, ashamed
