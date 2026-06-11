@@ -57,3 +57,10 @@ models/
 !data/**
 !outputs/
 !outputs/**
+# Local explainer documents (keep off GitHub)
+*.html
+
+# Session/local files
+.claude/
+.Rhistory
+**/.DS_Store

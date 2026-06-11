@@ -1,4 +1,10 @@
-"""Evaluation suite for DESA systems."""
+"""Evaluation suite for DESA systems.
+
+LEGACY (v1): superseded by eval_core.py / final_eval.py / analysis.py (notebook
+10). Known flaw kept for provenance: `static_prompt`'s perplexity was computed
+on a different prompt than it generated with, under an undefined adapter state
+(the PPL=22,866 row). `EMOTION_TO_BROAD` is still imported by the active stack.
+"""
 
 from __future__ import annotations
 

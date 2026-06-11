@@ -1,5 +1,13 @@
 """Corrected gating heads and training loops for DESA.
 
+PARTIALLY SUPERSEDED: `LastTokenGatingHead` and `train_turn_gate_v2` are still
+the active turn-gate implementation (used by notebook 10). The X-LoRA training
+in `train_xlora_classifier_v2` is superseded by `routing_objectives.py` — it
+was never run, and it contains a silent bug: it extracts classifier inputs by
+calling the inner model directly, which (verified against peft 0.18.1) applies
+ALL adapters at FULL weight instead of suppressing them. Use
+`routing_objectives.train_router` instead.
+
 This module is additive — it does not modify the original `gating.py`. It exposes:
 
 - `LastTokenGatingHead`: same MLP architecture as `gating.TurnLevelGatingHead`

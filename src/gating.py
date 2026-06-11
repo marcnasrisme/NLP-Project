@@ -1,4 +1,11 @@
-"""Gating heads and training helpers for DESA."""
+"""Gating heads and training helpers for DESA.
+
+LEGACY (v1): the mean-pooled turn gate trained here collapsed to an
+input-independent prior (see PROJECT_EXPLAINER.md §7.3). Kept for provenance and
+for shared helpers (`load_gating_records`, `build_context_prompt`, `_collate`)
+that the active stack still imports. New work: see RESEARCH_PLAN.md and
+notebooks 06-10.
+"""
 
 from __future__ import annotations
 

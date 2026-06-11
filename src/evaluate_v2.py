@@ -1,5 +1,9 @@
 """Corrected evaluation orchestration for DESA.
 
+LEGACY (v2, never run): superseded by `final_eval.py` + `analysis.py`
+(notebook 10), which additionally add information-parity prompts, per-example
+records, seeded generation, and bootstrap statistics.
+
 Additive companion to `evaluate.py`. The original `04_evaluation.ipynb` measures
 `static_prompt`'s perplexity against an instruction-wrapped prompt (which crams
 the whole conversation into one user turn). Mistral-Instruct does not predict
