@@ -44,6 +44,20 @@ print("prompts.py OK")
 
 # --- eval_core bootstrap -------------------------------------------------
 from eval_core import corpus_ppl, mean_example_nll, paired_bootstrap_nll, distinct_n
+from eval_core import _utterances_from_example
+
+# Regression: the ED-llm test split stores turns under `conversations`
+# ([{role, content}]), not `utterances`. sample_test_examples must normalize
+# them or it silently samples 0 examples (the bug seen in notebook 07).
+convo_ex = {"emotion": "guilty", "conversations": [
+    {"role": "user", "content": "I felt bad about it."},
+    {"role": "assistant", "content": "That sounds tough."},
+]}
+norm = _utterances_from_example(convo_ex)
+assert norm == ["I felt bad about it.", "That sounds tough."], norm
+assert is_valid_eval_example({**convo_ex, "utterances": norm}), "even-length convo must be valid"
+# already-normalized utterances must pass through unchanged
+assert _utterances_from_example({"utterances": ["a", "b"]}) == ["a", "b"]
 
 rng = np.random.default_rng(0)
 recs_a = [{"sum_nll": float(rng.normal(20, 2)), "n_tokens": 10, "example_id": k} for k in range(200)]

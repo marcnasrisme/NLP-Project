@@ -52,6 +52,20 @@ def set_all_seeds(seed: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _utterances_from_example(example: dict) -> list[str]:
+    """Normalize an ED example to a flat list of utterance strings.
+
+    Handles both the raw HF schema (`conversations`/`messages` as lists of
+    {role, content} dicts) and the already-normalized training-split schema
+    (`utterances` as a list of strings). Mirrors clustering._normalise_messages
+    so eval and training see identical text.
+    """
+    convo = example.get("conversations") or example.get("messages") or []
+    if convo:
+        return [str(t.get("content", "")).strip() for t in convo if str(t.get("content", "")).strip()]
+    return [str(u).strip() for u in example.get("utterances", []) if str(u).strip()]
+
+
 def sample_test_examples(
     cluster_assignments: dict[str, int],
     n_per_cluster: int = 50,
@@ -71,9 +85,17 @@ def sample_test_examples(
     for raw_idx, example in enumerate(dataset):
         emotion = str(example.get("emotion", "")).lower().strip()
         cid = cluster_assignments.get(emotion)
-        if cid is None or not is_valid_eval_example(example):
+        if cid is None:
             continue
         record = dict(example)
+        # The Estwld/empathetic_dialogues_llm split stores turns under
+        # `conversations` ([{role, content}]); the rest of the stack (prompts.py,
+        # is_valid_eval_example, gold_response) expects `utterances` ([str]), the
+        # same normalized form clustering.py wrote into the training splits.
+        # Normalize here so eval examples match the training distribution.
+        record["utterances"] = _utterances_from_example(example)
+        if not is_valid_eval_example(record):
+            continue
         record["example_id"] = raw_idx
         record["cluster_id"] = cid
         by_cluster[cid].append(record)
