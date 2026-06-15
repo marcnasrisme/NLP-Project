@@ -75,11 +75,14 @@ class LastTokenGatingHead(nn.Module):
     ) -> torch.Tensor:
         if attention_mask is None:
             return hidden_states[:, -1, :]
-        # last real-token index per sequence (attention_mask is 1 for real, 0 for pad)
-        seq_lengths = attention_mask.long().sum(dim=1) - 1
-        seq_lengths = seq_lengths.clamp(min=0)
+        # Last real-token index per sequence, robust to LEFT or RIGHT padding.
+        # `cumsum(mask).argmax` returns the first position holding the running
+        # max (the final 1) = the last real token wherever the pads sit. The
+        # naive `mask.sum()-1` is right-padding-only; the eval/training
+        # tokenizer pads LEFT, so it would read the wrong token in a batch.
+        last_idx = attention_mask.long().cumsum(dim=1).argmax(dim=1)
         batch_indices = torch.arange(hidden_states.size(0), device=hidden_states.device)
-        return hidden_states[batch_indices, seq_lengths]
+        return hidden_states[batch_indices, last_idx]
 
     def logits(
         self,

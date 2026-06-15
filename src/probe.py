@@ -85,13 +85,17 @@ def extract_features(
         with torch.no_grad():
             hidden = base_model(**batch, output_hidden_states=True).hidden_states[-1]
         mask = batch["attention_mask"]
-        # mean pool (masked)
+        # mean pool (masked) — correct for either padding side
         m = mask.unsqueeze(-1).to(hidden.dtype)
         mean_pooled = (hidden * m).sum(dim=1) / m.sum(dim=1).clamp(min=1e-9)
-        # last real token
-        seq_lengths = (mask.long().sum(dim=1) - 1).clamp(min=0)
+        # last real token, robust to LEFT or RIGHT padding. `cumsum(mask).argmax`
+        # returns the first position holding the running max (= the final 1),
+        # which is the last real token regardless of where the pads sit. The
+        # naive `mask.sum()-1` is only correct for right padding; the eval
+        # tokenizer pads LEFT, so that formula reads the wrong (often pad) token.
+        last_idx = mask.long().cumsum(dim=1).argmax(dim=1)
         idx = torch.arange(hidden.size(0), device=device)
-        last_pooled = hidden[idx, seq_lengths]
+        last_pooled = hidden[idx, last_idx]
 
         last_feats.append(last_pooled.float().cpu().numpy())
         mean_feats.append(mean_pooled.float().cpu().numpy())

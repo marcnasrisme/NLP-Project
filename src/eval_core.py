@@ -225,6 +225,21 @@ def mean_example_nll(records: Iterable[dict]) -> float:
     return float(np.mean(vals)) if vals else float("nan")
 
 
+def median_ppl(records: Iterable[dict]) -> float:
+    """Median of per-example PPL — robust to short-response/typo outliers.
+
+    Corpus PPL (exp of token-weighted mean NLL) is fragile: a 3-token gold reply
+    where the model assigns ~1e-12 to one token contributes a per-token NLL near
+    25, and with no long tail to dilute it the example's PPL hits ~1e11. A few
+    such examples distort the corpus number badly (this is exactly what made the
+    base row of the specialization matrix read ~1200 instead of a sane floor).
+    The median ignores those tails and reports the typical example, so it is the
+    primary statistic for the matrix; corpus PPL is kept alongside for continuity.
+    """
+    vals = [math.exp(r["sum_nll"] / r["n_tokens"]) for r in records if r["n_tokens"] > 0]
+    return float(np.median(vals)) if vals else float("nan")
+
+
 def paired_bootstrap_nll(
     records_a: list[dict],
     records_b: list[dict],

@@ -46,7 +46,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval_core import corpus_ppl, per_example_nll, sample_test_examples, save_json, save_jsonl
+from eval_core import corpus_ppl, median_ppl, per_example_nll, sample_test_examples, save_json, save_jsonl
 from paths import OUTPUTS_DIR
 from prompts import build_vanilla_prompt
 
@@ -106,17 +106,24 @@ def run_specialization_matrix(
 
         model.load_adapter(str(OUTPUTS_DIR / "adapter_pooled" / "final"), adapter_name="pooled")
 
-    Returns {"matrix": {condition: {cluster: corpus_ppl}}, ...} and writes
-    per-example records + the matrix summary under `out_dir`.
+    Returns a dict with TWO matrices keyed [condition][cluster]:
+      - "matrix"        median per-example PPL (the robust, primary statistic)
+      - "matrix_corpus" corpus PPL (token-weighted; kept for continuity)
+    plus the per-example records and a summary. `summary` is computed on the
+    median matrix so the verdict is not distorted by short-response outliers
+    (a 3-token reply where the base assigns ~1e-12 to one token can otherwise
+    blow a cell up to ~1e11). Writes per-example NLL + both matrices to disk.
     """
     out_dir = Path(out_dir)
     all_records: list[dict] = []
-    matrix: dict[str, dict[int, float]] = {}
+    matrix: dict[str, dict[int, float]] = {}          # median per-example PPL (primary)
+    matrix_corpus: dict[str, dict[int, float]] = {}    # corpus PPL (reference)
 
     for name, setup, ctx in _conditions(model, include_pooled):
         if setup is not None:
             setup()
         matrix[name] = {}
+        matrix_corpus[name] = {}
         for cid, examples in examples_by_cluster.items():
             records = per_example_nll(
                 model,
@@ -130,13 +137,25 @@ def run_specialization_matrix(
             for record in records:
                 record["condition"] = name
             all_records.extend(records)
-            matrix[name][cid] = corpus_ppl(records)
-            print(f"  {name:14s} | test cluster {cid}: PPL = {matrix[name][cid]:.2f}")
+            matrix[name][cid] = median_ppl(records)
+            matrix_corpus[name][cid] = corpus_ppl(records)
+            print(
+                f"  {name:14s} | test cluster {cid}: "
+                f"median PPL = {matrix[name][cid]:.2f} (corpus {matrix_corpus[name][cid]:.1f})"
+            )
 
     summary = summarize_matrix(matrix)
     save_jsonl(all_records, out_dir / "per_example_nll.jsonl")
-    save_json({"matrix": matrix, "summary": summary}, out_dir / "matrix.json")
-    return {"matrix": matrix, "summary": summary, "records": all_records}
+    save_json(
+        {"matrix": matrix, "matrix_corpus": matrix_corpus, "summary": summary},
+        out_dir / "matrix.json",
+    )
+    return {
+        "matrix": matrix,
+        "matrix_corpus": matrix_corpus,
+        "summary": summary,
+        "records": all_records,
+    }
 
 
 def summarize_matrix(matrix: dict[str, dict[int, float]]) -> dict:

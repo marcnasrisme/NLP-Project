@@ -104,6 +104,29 @@ The decisive comparisons: `turn_gate` vs `uniform_blend` (does *learned* routing
 
 Metrics: gold-response perplexity with bootstrap 95% CIs, paired-bootstrap NLL tests, Distinct-1/2, information-parity emotion accuracy, routing entropy/alignment/accuracy.
 
+## Pre-trained adapters (run without retraining)
+
+The four trained QLoRA adapters are published as a GitHub Release so you can run the
+experiment notebooks (07–10) without redoing notebook 02:
+[**releases/tag/adapters-v1**](https://github.com/marcnasrisme/DESA/releases/tag/adapters-v1).
+
+You don't need to fetch them by hand — the notebooks call `ensure_adapters_present([0,1,2,3])`,
+which now resolves adapters in this order: **already on disk → download from the Release →
+prompt for manual upload**. So in a fresh Colab runtime the adapters download automatically.
+
+To grab them manually:
+
+```bash
+for c in 0 1 2 3; do
+  curl -L -o outputs/adapter_cluster_$c.zip \
+    https://github.com/marcnasrisme/DESA/releases/download/adapters-v1/adapter_cluster_$c.zip
+  unzip -o outputs/adapter_cluster_$c.zip -d .
+done
+```
+
+(The pooled control adapter from notebook 06 will be added to the Release once trained. Model
+weights stay out of git history — only small results live in the repo.)
+
 ## Colab quickstart
 
 The laptop repository is the source of truth. Colab is only a temporary GPU runner.
@@ -111,7 +134,7 @@ The laptop repository is the source of truth. Colab is only a temporary GPU runn
 1. In Colab: `File → Open notebook → GitHub → marcnasrisme/DESA`
 2. For notebooks 02–10, switch runtime to GPU (A100 recommended; notebook 09 needs it)
 3. Run the boot cell — it clones the repo, installs requirements, and imports `src/` modules
-4. Upload the adapter zips when prompted (notebooks 07–10)
+4. The adapter-check cell auto-downloads the pre-trained adapters from the Release (notebooks 07–10)
 5. Run all cells; the final cell downloads new artifacts as a zip
 
 ## Built with
